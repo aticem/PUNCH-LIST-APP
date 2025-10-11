@@ -1,20 +1,4 @@
-/* Copy */
-:root{
-  --bg:#0f172a; --panel:#111827; --text:#e5e7eb; --muted:#94a3b8;
-  --done:#16a34a; --todo:#6b7280; --hover:#eab308;
-}
-*{box-sizing:border-box}
-html,body,#root{height:100%;margin:0}
-body{background:var(--bg);color:var(--text);font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Arial}
-
-.app{display:grid;grid-template-rows:auto 1fr;height:100%}
-.topbar{display:flex;gap:12px;align-items:center;padding:10px 14px;background:rgba(17,24,39,.85);border-bottom:1px solid rgba(148,163,184,.2)}
-.topbar .stat{padding:6px 10px;border:1px solid rgba(148,163,184,.25);border-radius:10px;background:rgba(2,6,23,.4);font-size:14px}
-.topbar .actions{margin-left:auto;display:flex;gap:8px}
-button.ui{background:var(--panel);color:var(--text);border:1px solid rgba(148,163,184,.25);padding:8px 10px;border-radius:10px;cursor:pointer}
-button.ui:hover{border-color:rgba(234,179,8,.7)}
-.leaflet-container{background:#0b1020}
-.legend{position:absolute;bottom:14px;left:14px;background:rgba(2,6,23,.7);border:1px solid rgba(148,163,184,.25);border-radius:10px;padding:10px 12px;z-index:1000;font-size:13px}
-.legend .row{display:flex;align-items:center;gap:8px;margin:4px 0}
-.legend .dot{width:14px;height:10px;border-radius:3px}
-.footer{position:absolute;bottom:14px;right:14px;font-size:12px;color:var(--muted);background:rgba(2,6,23,.6);padding:6px 8px;border-radius:8px;border:1px solid rgba(148,163,184,.2);z-index:1000}
+html, body, #root { height: 100%; margin: 0; }
+#root { overflow: hidden; }           /* Map tam ekran; scroll tekeri map'e gitsin */
+.leaflet-container { height: 100vh; width: 100vw; }
+.app, .map-wrapper { height: 100%; }  /* varsa üst sarmalayıcılar tam yükseklik */

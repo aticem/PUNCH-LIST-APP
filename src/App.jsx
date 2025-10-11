@@ -1,296 +1,211 @@
-// Copy
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { MapContainer, TileLayer, GeoJSON, useMap } from 'react-leaflet'
-import L from 'leaflet'
+import React, { useRef, useEffect, useState } from "react";
+import { MapContainer, TileLayer, useMap, GeoJSON, ZoomControl } from "react-leaflet";
+import L from "leaflet";
+import MC4CapsFromGeoJSON from "./MC4CapsFromGeoJSON";
+import "leaflet/dist/leaflet.css";
 
-/** Sadece ilk kez fitBounds yap */
-function FitToDataOnce({ geojson }) {
-  const map = useMap()
-  const fittedRef = useRef(false)
+/** Panel GeoJSON'una tek sefer fit et */
+function FitToPanelsOnce({ src, data, paddingRatio = 0.12, fitMaxZoom = 22 }) {
+  const map = useMap();
+  const fittedRef = useRef(false);
+
   useEffect(() => {
-    if (!geojson || fittedRef.current) return
-    const gj = L.geoJSON(geojson)
-    const b = gj.getBounds()
-    if (b.isValid()) {
-      map.fitBounds(b.pad(0.15))
-      fittedRef.current = true
-    }
-  }, [geojson, map])
-  return null
-}
+    if (fittedRef.current) return;
+    let cancelled = false;
 
-/** Orta tuş: basılı pan, teker zoom */
-function MiddlePanAndZoom() {
-  const map = useMap()
-  useEffect(() => {
-    const c = map.getContainer()
-    map.dragging.disable()
-    map.doubleClickZoom.disable()
-    map.scrollWheelZoom.enable() // sadece tekerleğe izin ver
-    c.style.cursor = 'grab'
+    async function loadAndFit() {
+      try {
+        let gj = data;
+        if (!gj && src) {
+          const r = await fetch(src);
+          gj = await r.json();
+        }
+        if (cancelled || !gj) return;
 
-    const onMouseDownCapture = (ev) => {
-      if (ev.button === 1) { // middle
-        ev.preventDefault()
-        map.dragging.enable()
-        c.style.cursor = 'grabbing'
-      } else {
-        map.dragging.disable()
-        c.style.cursor = 'default'
+        const layer = L.geoJSON(gj);
+        const b = layer.getBounds();
+        if (!b || !b.isValid()) return;
+
+        map.whenReady(() => {
+          map.invalidateSize();
+          const padB = b.pad(paddingRatio);
+          map.fitBounds(padB, { maxZoom: fitMaxZoom, animate: false });
+          fittedRef.current = true;
+        });
+      } catch (e) {
+        console.error("FitToPanelsOnce error:", e);
       }
     }
-    const onMouseUp = () => {
-      map.dragging.disable()
-      c.style.cursor = 'grab'
-    }
-    const onContextMenu = (ev) => ev.preventDefault()
 
-    // dblclick zoomu da kapalı tut
-    const stopEvt = (e) => { e.preventDefault(); e.stopPropagation() }
-    map.on('dblclick', stopEvt)
+    loadAndFit();
+    const onResize = () => map.invalidateSize();
+    window.addEventListener("resize", onResize);
+    return () => { cancelled = true; window.removeEventListener("resize", onResize); };
+  }, [map, src, data, paddingRatio, fitMaxZoom]);
 
-    c.addEventListener('mousedown', onMouseDownCapture, { capture: true })
-    c.addEventListener('mouseup', onMouseUp)
-    c.addEventListener('contextmenu', onContextMenu)
-
-    return () => {
-      map.off('dblclick', stopEvt)
-      c.removeEventListener('mousedown', onMouseDownCapture, { capture: true })
-      c.removeEventListener('mouseup', onMouseUp)
-      c.removeEventListener('contextmenu', onContextMenu)
-    }
-  }, [map])
-  return null
+  return null;
 }
 
-/** Yakınlık bazlı işaretleme/silme (sol=done, sağ=todo) */
-function ProximityInteractions({ layersRef, setStatusByLayer }) {
-  const map = useMap()
-  const isLeftDownRef  = useRef(false)
-  const isRightDownRef = useRef(false)
-  const movedLeftRef   = useRef(false)
-  const movedRightRef  = useRef(false)
-  const downPointLeft  = useRef({x:0,y:0})
-  const downPointRight = useRef({x:0,y:0})
-  const MOVE_THRESHOLD = 3
-  const TOLERANCE_PX   = 10
-
-  const nearestLayerWithin = (containerPt, tolPx) => {
-    let best = null, bestD = Infinity
-    for (const entry of layersRef.current) {
-      const b = entry.layer.getBounds()
-      if (!b.isValid()) continue
-      const nw = map.latLngToContainerPoint(b.getNorthWest())
-      const se = map.latLngToContainerPoint(b.getSouthEast())
-      const minX = Math.min(nw.x, se.x), maxX = Math.max(nw.x, se.x)
-      const minY = Math.min(nw.y, se.y), maxY = Math.max(nw.y, se.y)
-      const dx = (containerPt.x < minX) ? (minX - containerPt.x) : (containerPt.x > maxX ? (containerPt.x - maxX) : 0)
-      const dy = (containerPt.y < minY) ? (minY - containerPt.y) : (containerPt.y > maxY ? (containerPt.y - maxY) : 0)
-      const d = Math.hypot(dx, dy)
-      if (d <= tolPx && d < bestD) { bestD = d; best = entry.layer }
-    }
-    return best
-  }
-
-  const paintAtEvent = (e, mode) => {
-    const pt = map.mouseEventToContainerPoint(e.originalEvent)
-    const lyr = nearestLayerWithin(pt, TOLERANCE_PX)
-    if (lyr) setStatusByLayer(lyr, mode)
-  }
-
+/** Zoom sadece wheel; diğer zoom yöntemleri kapalı. Drag pan kapalı (orta tuşla özel pan var). */
+function ForceZoomBehaviors() {
+  const map = useMap();
   useEffect(() => {
+    map.scrollWheelZoom.enable();    // sadece wheel zoom
+    map.doubleClickZoom.disable();   // çift tık kapalı
+    map.touchZoom.disable();         // pinch kapalı
+    map.keyboard.disable();          // klavye +/− kapalı
+    map.dragging.disable();          // pan sadece orta tuşla
+
+    const c = map.getContainer();
+    L.DomEvent.disableScrollPropagation(c);
+    L.DomEvent.disableClickPropagation(c);
+
+    const onEnter = () => map.scrollWheelZoom.enable();
+    c.addEventListener("mouseenter", onEnter);
+
+    const t = setTimeout(() => map.invalidateSize(), 50);
+    return () => { c.removeEventListener("mouseenter", onEnter); clearTimeout(t); };
+  }, [map]);
+  return null;
+}
+
+/** Orta tuş basılıyken özel PAN */
+function PanWithMiddleMouse() {
+  const map = useMap();
+  useEffect(() => {
+    const c = map.getContainer();
+    let panning = false;
+    let last = null;
+
     const onMouseDown = (e) => {
-      const btn = e.originalEvent?.button
-      if (btn === 0) {
-        isLeftDownRef.current = true; movedLeftRef.current = false
-        downPointLeft.current = { x: e.originalEvent.clientX, y: e.originalEvent.clientY }
-        paintAtEvent(e, 'done')
-        L.DomEvent.stop(e)
-      } else if (btn === 2) {
-        isRightDownRef.current = true; movedRightRef.current = false
-        downPointRight.current = { x: e.originalEvent.clientX, y: e.originalEvent.clientY }
-        paintAtEvent(e, 'todo')
-        e.originalEvent.preventDefault(); e.originalEvent.stopPropagation()
+      if (e.button === 1) { // middle
+        e.preventDefault();
+        panning = true;
+        last = L.point(e.clientX, e.clientY);
       }
-    }
-
+    };
     const onMouseMove = (e) => {
-      const { clientX, clientY, buttons } = e.originalEvent
-      if (isLeftDownRef.current || (buttons & 1)) {
-        const dx = Math.abs(clientX - downPointLeft.current.x)
-        const dy = Math.abs(clientY - downPointLeft.current.y)
-        if (dx > MOVE_THRESHOLD || dy > MOVE_THRESHOLD) movedLeftRef.current = true
-        paintAtEvent(e, 'done')
-      }
-      if (isRightDownRef.current || (buttons & 2)) {
-        const dx = Math.abs(clientX - downPointRight.current.x)
-        const dy = Math.abs(clientY - downPointRight.current.y)
-        if (dx > MOVE_THRESHOLD || dy > MOVE_THRESHOLD) movedRightRef.current = true
-        paintAtEvent(e, 'todo')
-      }
-    }
+      if (!panning || !last) return;
+      const cur = L.point(e.clientX, e.clientY);
+      const delta = cur.subtract(last);
+      map.panBy(L.point(-delta.x, -delta.y), { animate: false });
+      last = cur;
+    };
+    const endPan = () => { panning = false; last = null; };
+    const onContextMenu = (e) => e.preventDefault(); // sağ tık menüsü kapalı (sağ tuş ON için)
 
-    const onMouseUp = () => {
-      isLeftDownRef.current = false
-      isRightDownRef.current = false
-      movedLeftRef.current = false
-      movedRightRef.current = false
-    }
-
-    const onClick = (e) => {
-      if (e.originalEvent?.button !== 0) return
-      if (movedLeftRef.current) return
-      const pt = map.mouseEventToContainerPoint(e.originalEvent)
-      const lyr = nearestLayerWithin(pt, TOLERANCE_PX)
-      if (lyr) {
-        const cur = lyr.feature.properties.status
-        const next = (cur === 'done') ? 'todo' : 'done'
-        setStatusByLayer(lyr, next)
-        L.DomEvent.stop(e)
-      }
-    }
-
-    const onContextMenu = (e) => {
-      const pt = map.mouseEventToContainerPoint(e.originalEvent)
-      const lyr = nearestLayerWithin(pt, TOLERANCE_PX)
-      if (lyr) {
-        setStatusByLayer(lyr, 'todo')
-        e.originalEvent.preventDefault()
-        e.originalEvent.stopPropagation()
-      }
-    }
-
-    map.on('mousedown', onMouseDown)
-    map.on('mousemove', onMouseMove)
-    map.on('mouseup', onMouseUp)
-    map.on('click', onClick)
-    map.on('contextmenu', onContextMenu)
+    c.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", endPan);
+    c.addEventListener("contextmenu", onContextMenu);
 
     return () => {
-      map.off('mousedown', onMouseDown)
-      map.off('mousemove', onMouseMove)
-      map.off('mouseup', onMouseUp)
-      map.off('click', onClick)
-      map.off('contextmenu', onContextMenu)
-    }
-  }, [map, setStatusByLayer, layersRef])
-
-  return null
+      c.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", endPan);
+      c.removeEventListener("contextmenu", onContextMenu);
+    };
+  }, [map]);
+  return null;
 }
 
-export default function App(){
-  const [base, setBase] = useState(null)
-  const [features, setFeatures] = useState([])
-  const [geoKey, setGeoKey] = useState(0)
-  const layersRef = useRef([])
-
-  useEffect(() => {
-    const load = async () => {
-      const candidates = ['panels.geojson','/panels.geojson','/public/panels.geojson']
-      let text = null
-      for (const u of candidates) {
-        try {
-          const r = await fetch(u, { cache:'no-store' })
-          if (!r.ok) continue
-          const t = await r.text()
-          if (t.trim().startsWith('<')) continue
-          text = t; break
-        } catch {}
+/** Üst toolbar */
+function ViewToolbar({ src, data, stats, onReset }) {
+  const map = useMap();
+  const fit = async () => {
+    try {
+      let gj = data;
+      if (!gj && src) {
+        const r = await fetch(src);
+        gj = await r.json();
       }
-      if (!text) { console.error('public/panels.geojson bulunamadı'); return }
-      const gj = JSON.parse(text)
-      const merged = (gj.features||[]).map((f,i)=>{
-        const id = f.properties?.panel_id ?? `P${i+1}`
-        return { ...f, properties:{ ...f.properties, panel_id:id, status:'todo' } }
-      })
-      setBase(gj); setFeatures(merged)
-    }
-    load()
-  }, [])
+      if (!gj) return;
+      const layer = L.geoJSON(gj);
+      const b = layer.getBounds();
+      if (b && b.isValid()) {
+        map.invalidateSize();
+        map.fitBounds(b.pad(0.12), { maxZoom: 22 });
+      }
+    } catch (e) { console.error("Manual fit error:", e); }
+  };
 
-  const stats = useMemo(()=>{
-    const total = features.length
-    const done = features.filter(f=>f.properties.status==='done').length
-    return { total, done, remaining: total - done }
-  },[features])
-
-  const styleFn = (feat) => {
-    const base = { weight:1, opacity:.9, fillOpacity:.55 }
-    return feat.properties?.status==='done'
-      ? { ...base, color:'#16a34a', fillColor:'#16a34a' }
-      : { ...base, color:'#6b7280', fillColor:'#6b7280' }
-  }
-  const hoverStyle = { weight:2.5, color:'#eab308', fillColor:'#eab308', fillOpacity:.35 }
-
-  const setStatusByLayer = (layer, status) => {
-    const id = layer.feature.properties.panel_id
-    layer.feature.properties.status = status
-    layer.setStyle(styleFn(layer.feature))
-    setFeatures(prev => prev.map(f => {
-      if (f.properties.panel_id !== id) return f
-      return { ...f, properties:{ ...f.properties, status } }
-    }))
-  }
-
-  const onEach = (_feature, layer)=>{
-    layer.on('mouseover', ()=> layer.setStyle(hoverStyle))
-    layer.on('mouseout',  ()=> layer.setStyle(styleFn(layer.feature)))
-    layersRef.current.push({ id: layer.feature.properties.panel_id, layer })
-  }
-
-  const liveGeo = useMemo(()=> base && ({type:'FeatureCollection', features}), [base, features])
-
-  const resetAll = ()=>{
-    setFeatures(prev=>prev.map(f=>({...f, properties:{...f.properties, status:'todo'}})))
-    setGeoKey(k => k + 1)
-    layersRef.current = []
-  }
-
-  const exportCSV = ()=>{
-    const lines = [['panel_id','status'], ...features.map(f=>[f.properties.panel_id, f.properties.status])]
-    const csv = lines.map(r=>r.map(x=>`"${String(x).replaceAll('"','""')}"`).join(',')).join('\n')
-    const blob = new Blob([csv],{type:'text/csv;charset=utf-8;'}); const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href=url; a.download='panel-status.csv'; a.click(); URL.revokeObjectURL(url)
-  }
+  const chip = {
+    display: "flex", alignItems: "center", gap: 8,
+    marginLeft: 8, padding: "6px 12px",
+    background: "#0b1220", borderRadius: 8,
+    fontWeight: 800, fontSize: 15, lineHeight: 1
+  };
+  const label = {
+    opacity: 0.8, fontWeight: 700, fontSize: 12,
+    letterSpacing: "0.02em", textTransform: "uppercase"
+  };
 
   return (
-    <div className="app">
-      <div className="topbar" style={{display:'flex',gap:12,alignItems:'center',padding:'10px 14px',background:'rgba(17,24,39,.85)',borderBottom:'1px solid rgba(148,163,184,.2)'}}>
-        <div className="stat" style={{padding:'6px 10px',border:'1px solid rgba(148,163,184,.25)',borderRadius:10,background:'rgba(2,6,23,.4)',fontSize:14}}>Total: <b>{stats.total}</b></div>
-        <div className="stat" style={{padding:'6px 10px',border:'1px solid rgba(148,163,184,.25)',borderRadius:10,background:'rgba(2,6,23,.4)',fontSize:14}}>Done: <b style={{color:'#22c55e'}}>{stats.done}</b></div>
-        <div className="stat" style={{padding:'6px 10px',border:'1px solid rgba(148,163,184,.25)',borderRadius:10,background:'rgba(2,6,23,.4)',fontSize:14}}>Remaining: <b style={{color:'#f59e0b'}}>{stats.remaining}</b></div>
-        <div style={{marginLeft:'auto',display:'flex',gap:8}}>
-          <button onClick={exportCSV}>Export CSV</button>
-          <button onClick={resetAll}>Reset All</button>
-        </div>
-      </div>
+    <div style={{
+      position: "absolute", top: 12, left: 12, zIndex: 1000,
+      background: "rgba(15,23,42,0.85)", color: "#fff",
+      padding: "10px 12px", borderRadius: 12,
+      fontFamily: "Inter, system-ui, sans-serif", display: "flex", gap: 10, alignItems: "center", userSelect: "none",
+    }}>
+      <button onClick={fit} style={btnStyle}>Fit</button>
+      <button onClick={() => map.zoomIn(1)} style={btnStyle}>+</button>
+      <button onClick={() => map.zoomOut(1)} style={btnStyle}>−</button>
 
+      <div style={chip}><span style={label}>MC4</span><span>{stats.unitsDone} / {stats.unitsTotal}</span></div>
+      <div style={chip}><span style={label}>Masa</span><span>{stats.tablesDone} / {stats.total}</span></div>
+
+      <button onClick={onReset} style={{ ...btnStyle, background: "#ef4444", color: "#fff" }}>Reset</button>
+    </div>
+  );
+}
+const btnStyle = { background: "#22c55e", border: "none", color: "#0b1220", fontWeight: 700, padding: "6px 10px", borderRadius: 8, cursor: "pointer" };
+
+export default function App() {
+  const [background, setBackground] = useState(null);
+  const [stats, setStats] = useState({ total: 0, tablesDone: 0, capsOn: 0, unitsDone: 0, unitsTotal: 0 });
+  const [resetToken, setResetToken] = useState(0);
+
+  useEffect(() => {
+    fetch("/background.geojson").then(r => (r.ok ? r.json() : null)).then(setBackground).catch(() => {});
+  }, []);
+
+  const doReset = () => {
+    setResetToken(t => t + 1);
+    setStats(s => ({ ...s, tablesDone: 0, capsOn: 0, unitsDone: 0 }));
+  };
+
+  return (
+    <div className="map-wrapper">
       <MapContainer
-        center={[52.5,-1.5]}
-        zoom={17}
+        center={[0, 0]} zoom={3}
+        style={{ height: "100vh", width: "100vw" }}
+        preferCanvas
+        scrollWheelZoom={true}
+        wheelDebounceTime={0}
+        wheelPxPerZoomLevel={80}
+        zoomSnap={1}
+        zoomDelta={1}
         minZoom={2}
-        maxZoom={22}
-        style={{height:'calc(100vh - 54px)', width:'100%'}}
-        doubleClickZoom={false}
-        touchZoom={false}
-        keyboard={false}
-        boxZoom={false}
-        zoomControl={true}
+        maxZoom={24}
+        zoomControl={false}
       >
-        <MiddlePanAndZoom/>
-        <TileLayer
-          attribution="&copy; OpenStreetMap"
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" maxNativeZoom={19} />
+        <ZoomControl position="topright" />
+        <ForceZoomBehaviors />
+        <PanWithMiddleMouse />
+
+        <FitToPanelsOnce src="/panels.geojson" fitMaxZoom={22} />
+        <ViewToolbar src="/panels.geojson" stats={stats} onReset={doReset} />
+
+        {background && <GeoJSON data={background} style={{ color: "#111827", weight: 2, opacity: 0.9 }} />}
+        <MC4CapsFromGeoJSON
+          key={`mc4-${resetToken}`}
+          src="/panels.geojson"
+          capPx={12}
+          onStats={setStats}
+          resetToken={resetToken}
         />
-        {liveGeo && (
-          <>
-            {/* 🔒 Sadece ilk sefer fit olur; sonra zoom/pan asla resetlenmez */}
-            <FitToDataOnce geojson={liveGeo}/>
-            <GeoJSON key={geoKey} data={liveGeo} style={styleFn} onEachFeature={onEach}/>
-            <ProximityInteractions layersRef={layersRef} setStatusByLayer={setStatusByLayer}/>
-          </>
-        )}
       </MapContainer>
     </div>
-  )
+  );
 }
