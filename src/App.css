@@ -1,0 +1,51 @@
+html, body, #root, #app-wrap {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+#app-wrap {
+  position: relative;
+  background: #0f172a;
+  overflow: hidden;
+}
+
+.leaflet-container {
+  height: 100% !important;
+  width: 100% !important;
+}
+
+/* Sağ panel (varsa) haritanın üstüne bindir */
+#side-panel {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 40%;
+  background: #111;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-left: 2px solid #333;
+  z-index: 1000;
+}
+
+#side-panel img {
+  width: 90%;
+  border-radius: 10px;
+  max-height: 80vh;
+  object-fit: contain;
+}
+
+#side-panel button {
+  margin-top: 1rem;
+  padding: 0.5rem 1rem;
+  background: #444;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
