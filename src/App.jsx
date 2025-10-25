@@ -2,361 +2,293 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { MapContainer, TileLayer, GeoJSON } from "react-leaflet";
 import L from "leaflet";
 
-/* ---------- Güvenli merkez hesaplama ---------- */
+// ✅ public klasöründeki dosyalar ?url ile import edilir
+import tablesPolyUrl from "/tables_poly.geojson?url";
+import tablesPointsUrl from "/tables_points.geojson?url";
+
+/* -------------------- yardımcı fonksiyonlar -------------------- */
 function getSafeCenter(geojson) {
   try {
     const feats = geojson?.features || [];
-    if (!feats.length) return [52.712, -1.706];
     let sx = 0, sy = 0, n = 0;
     for (const f of feats) {
-      const g = f.geometry;
-      if (!g) continue;
-      if (g.type === "Point") {
-        const [lon, lat] = g.coordinates; // GeoJSON: [lon, lat]
+      if (f.geometry?.type === "Point") {
+        const [lon, lat] = f.geometry.coordinates;
         if (Number.isFinite(lat) && Number.isFinite(lon)) {
           sx += lon; sy += lat; n++;
         }
       }
     }
-    if (!n) return [52.712, -1.706];
-    return [sy / n, sx / n]; // [lat, lon]
-  } catch { return [52.712, -1.706]; }
-}
-
-/* ---------- Zoom orantılı yarıçap ---------- */
-function radiusForZoom(z, baseZoom = 18, baseRadius = 6, min = 2, max = 18) {
-  const k = Math.pow(2, (z ?? baseZoom) - baseZoom);
-  const r = baseRadius * k;
-  return Math.max(min, Math.min(max, r));
-}
-
-/* ---------- Deterministik jitter: punch.id → küçük ofset ---------- */
-/* Basit bir 32-bit hash */
-function hash32(str) {
-  let h = 2166136261 >>> 0;
-  for (let i = 0; i < String(str).length; i++) {
-    h ^= String(str).charCodeAt(i);
-    h = Math.imul(h, 16777619);
+    return n ? [sy / n, sx / n] : [52.712, -1.706];
+  } catch {
+    return [52.712, -1.706];
   }
-  return h >>> 0;
-}
-/* Mulberry32 PRNG */
-function mulberry32(seed) {
-  let t = seed >>> 0;
-  return function () {
-    t += 0x6D2B79F5;
-    let r = Math.imul(t ^ (t >>> 15), 1 | t);
-    r ^= r + Math.imul(r ^ (r >>> 7), 61 | r);
-    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
-  };
-}
-/* punch.id’ye bağlı stabil [dLon, dLat] üret */
-function jitterForPunch(punchId, radius = 0.00005) {
-  const rnd = mulberry32(hash32(punchId));
-  const angle = rnd() * 2 * Math.PI;
-  const dist = rnd() * radius; // 0..radius
-  const dLon = Math.cos(angle) * dist;
-  const dLat = Math.sin(angle) * dist;
-  return [dLon, dLat];
 }
 
+function scatterOffsets(count, radius = 0.00006) {
+  const arr = [];
+  for (let i = 0; i < count; i++) {
+    const angle = (i / count) * 2 * Math.PI;
+    const dist = radius * (0.55 + Math.random() * 0.45);
+    arr.push([Math.cos(angle) * dist, Math.sin(angle) * dist]);
+  }
+  return arr;
+}
+
+function getTableId(props) {
+  return (
+    props?.table_id ??
+    props?.tableId ??
+    props?.id ??
+    props?.name ??
+    null
+  );
+}
+
+/* -------------------- ana component -------------------- */
 export default function App() {
   const mapRef = useRef(null);
-  const pointsRef = useRef(null);
   const punchLayerRef = useRef(null);
 
-  const [background, setBackground] = useState(null);
-  const [tables, setTables] = useState(null);
-  const [selected, setSelected] = useState(null); // string table_id ya da {tableId, punchId}
-  const [punches, setPunches] = useState({});     // { [table_id]: [{id, isoX, isoY, note, photo}] }
-  const [newPunch, setNewPunch] = useState(null); // { table_id, isoX, isoY }
+  const [poly, setPoly] = useState(null);
+  const [points, setPoints] = useState(null);
+  const [punches, setPunches] = useState({});
+  const [selected, setSelected] = useState(null);
+  const [newPunch, setNewPunch] = useState(null);
   const [note, setNote] = useState("");
   const [photo, setPhoto] = useState(null);
-
   const isoRef = useRef(null);
   const [isoLoaded, setIsoLoaded] = useState(false);
   const [isoError, setIsoError] = useState(false);
 
-  /* ---------- Veri yükleme ---------- */
+  /* -------------------- GeoJSON verilerini yükle (?url yöntemiyle) -------------------- */
   useEffect(() => {
-    fetch("/background.geojson").then(r => r.json()).then(setBackground).catch(() => {});
-    fetch("/tables.geojson").then(r => r.json()).then(setTables).catch(() => {});
+    Promise.all([
+      fetch(tablesPolyUrl).then((r) => r.json()),
+      fetch(tablesPointsUrl).then((r) => r.json()),
+    ])
+      .then(([polyData, pointsData]) => {
+        setPoly(polyData);
+        setPoints(pointsData);
+        console.log("✅ GeoJSON loaded via ?url import");
+      })
+      .catch((err) => console.error("GeoJSON load error", err));
   }, []);
 
-  /* ---------- LocalStorage ---------- */
+  /* -------------------- localStorage -------------------- */
   useEffect(() => {
-    const stored = localStorage.getItem("punches");
-    if (stored) setPunches(JSON.parse(stored));
+    const s = localStorage.getItem("punches");
+    if (s) setPunches(JSON.parse(s));
   }, []);
   useEffect(() => {
     localStorage.setItem("punches", JSON.stringify(punches));
   }, [punches]);
 
-  /* ---------- Punch layer init ---------- */
-  useEffect(() => {
-    const map = mapRef.current;
-    if (map && !punchLayerRef.current) {
+  const initialCenter = useMemo(() => getSafeCenter(points), [points]);
+
+  const handleMapCreate = (map) => {
+    mapRef.current = map;
+    if (!punchLayerRef.current) {
       punchLayerRef.current = L.layerGroup().addTo(map);
     }
-  }, [tables]);
+  };
 
-  /* ---------- İlk merkez / boyut düzeltme ---------- */
-  const initialCenter = useMemo(() => getSafeCenter(tables), [tables]);
+  /* -------------------- haritada kırmızı punch noktaları -------------------- */
   useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-    setTimeout(() => map.invalidateSize({ animate: false }), 0);
-  }, [tables]);
+    const layer = punchLayerRef.current;
+    if (!layer || !points) return;
+    layer.clearLayers();
 
-  /* ---------- Zoom'a göre nokta yarıçapı ---------- */
-  useEffect(() => {
-    const map = mapRef.current;
-    const group = pointsRef.current;
-    if (!map || !group) return;
+    points.features.forEach((f) => {
+      const tid = getTableId(f.properties);
+      if (!tid) return;
+      const list = punches[tid] || [];
+      if (!list.length) return;
 
-    const update = () => {
-      const z = map.getZoom();
-      const r = radiusForZoom(z);
-      group.eachLayer(layer => {
-        if (layer instanceof L.CircleMarker) layer.setRadius(r);
-      });
-    };
-
-    update();
-    map.on("zoom", update);
-    map.on("zoomend", update);
-    return () => {
-      map.off("zoom", update);
-      map.off("zoomend", update);
-    };
-  }, [pointsRef.current]);
-
-  /* ---------- Harita üstü kırmızı punch noktaları (deterministik) ---------- */
-  useEffect(() => {
-    const punchLayer = punchLayerRef.current;
-    if (!punchLayer || !tables) return;
-
-    punchLayer.clearLayers();
-
-    tables.features.forEach(feature => {
-      const tableId = feature.properties.table_id;
-      const punchList = punches[tableId] || [];
-      if (!punchList.length) return;
-
-      const [lon, lat] = feature.geometry.coordinates; // [lon, lat]
-
-      punchList.forEach((punch) => {
-        const [dLon, dLat] = jitterForPunch(punch.id); // punch.id’ye bağlı stabil jitter
-        const punchLatLng = [lat + dLat, lon + dLon];  // [lat, lon]
-        const marker = L.circleMarker(punchLatLng, {
-          radius: 4,
+      const [lon, lat] = f.geometry.coordinates;
+      const offs = scatterOffsets(list.length, 0.00006);
+      list.forEach((p, i) => {
+        const [dx, dy] = offs[i];
+        const m = L.circleMarker([lat + dy, lon + dx], {
+          radius: 3.5,
           color: "#f00",
           fillColor: "#f00",
-          fillOpacity: 0.9,
-          weight: 1
-        })
-          .bindTooltip("Punch", { direction: "top", offset: [0, -6] })
-          .on("click", () => {
-            // Kırmızı nokta tıklandı → aynı masanın izometriği açılsın, ilgili punch sarı vurgulansın
-            setSelected({ tableId, punchId: punch.id });
-          });
-
-        punchLayer.addLayer(marker);
+          fillOpacity: 1,
+          weight: 1,
+        }).on("click", () => setSelected({ tableId: tid, punchId: p.id }));
+        layer.addLayer(m);
       });
     });
-  }, [punches, tables]);
 
-  /* ---------- Seçim yardımcıları ---------- */
-  const isPunchSelected = selected != null && typeof selected === "object";
-  const selectedTableId = isPunchSelected ? selected.tableId : selected;
-  const selectedPunch = isPunchSelected
-    ? (punches[selectedTableId] || []).find(p => p.id === selected.punchId)
-    : null;
+    console.log(
+      "🔴 rendered punch dots:",
+      Object.values(punches).reduce((a, v) => a + v.length, 0)
+    );
+  }, [punches, points]);
 
-  /* ---------- İzometrik tıklama → yeni punch ---------- */
-  const handleIsoClick = (e) => {
-    if (!isoRef.current || !isoLoaded || isoError || !selectedTableId) return;
+  const safeTableId =
+    typeof selected === "object" && selected !== null
+      ? selected.tableId
+      : typeof selected === "string"
+      ? selected
+      : null;
+
+  /* -------------------- izometrik etkileşimleri -------------------- */
+  const onIsoClick = (e) => {
+    if (!isoRef.current || !isoLoaded || isoError || !safeTableId) return;
     const rect = isoRef.current.getBoundingClientRect();
     const isoX = ((e.clientX - rect.left) / rect.width) * 100;
     const isoY = ((e.clientY - rect.top) / rect.height) * 100;
-    setNewPunch({ table_id: selectedTableId, isoX, isoY });
+    setNewPunch({ table_id: safeTableId, isoX, isoY });
   };
 
-  /* ---------- Foto yükleme ---------- */
-  const handlePhotoChange = (e) => {
-    const file = e.target.files[0];
-    if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => setPhoto(reader.result);
-      reader.readAsDataURL(file);
-    }
+  const onPhoto = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onloadend = () => setPhoto(reader.result);
+    reader.readAsDataURL(file);
   };
 
-  /* ---------- Punch kaydet ---------- */
   const addPunch = () => {
-    if (!newPunch) return;
-    const tableId = newPunch.table_id;
-    const punchId = Date.now();
-    const newP = { id: punchId, isoX: newPunch.isoX, isoY: newPunch.isoY, note, photo };
-    setPunches(prev => ({
+    if (!newPunch || !newPunch.table_id) return;
+    const id = Date.now();
+    const record = {
+      id,
+      isoX: newPunch.isoX,
+      isoY: newPunch.isoY,
+      note,
+      photo,
+    };
+    setPunches((prev) => ({
       ...prev,
-      [tableId]: [...(prev[tableId] || []), newP]
+      [newPunch.table_id]: [...(prev[newPunch.table_id] || []), record],
     }));
     setNewPunch(null);
     setNote("");
     setPhoto(null);
   };
 
-  const mapKey = useMemo(() => `m-${!!tables}`, [tables]);
+  if (!points || !poly) {
+    return (
+      <div style={{ background: "#111", color: "#fff", padding: 12 }}>
+        <b>Loading data...</b>
+      </div>
+    );
+  }
 
+  /* -------------------- render -------------------- */
   return (
     <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
-      {tables && (
-        <MapContainer
-          key={mapKey}
-          whenCreated={(m) => (mapRef.current = m)}
-          style={{ height: "100%", width: "100%" }}
-          center={initialCenter}
-          zoom={18}
-          minZoom={14}
-          maxZoom={22}
-          preferCanvas
-          zoomControl
-        >
-          <TileLayer
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            attribution="&copy; OpenStreetMap contributors"
-          />
+      <MapContainer
+        whenCreated={handleMapCreate}
+        style={{ height: "100%", width: "100%" }}
+        center={initialCenter}
+        zoom={18}
+        minZoom={14}
+        maxZoom={22}
+        preferCanvas
+      >
+        <TileLayer
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          attribution="&copy; OpenStreetMap"
+        />
 
-          {background && (
-            <GeoJSON
-              data={background}
-              style={{ color: "#222", weight: 1, opacity: 0.6, fillOpacity: 0.05 }}
-            />
-          )}
+        {/* Gri masa alanları */}
+        <GeoJSON
+          data={poly}
+          style={{ color: "#333", weight: 1, opacity: 0.6, fillOpacity: 0.05 }}
+        />
 
-          <GeoJSON
-            data={tables}
-            ref={pointsRef}
-            pointToLayer={(feature, latlng) => {
-              const z = mapRef.current?.getZoom?.() ?? 18;
-              return L.circleMarker(latlng, {
-                radius: radiusForZoom(z),
-                color: "#000",
-                fillColor: "#000",
-                fillOpacity: 0.95,
-                weight: 0.5
-              }).bindTooltip(
-                `${feature.properties?.table_id || ""}` +
-                (() => {
-                  const c = (punches[feature.properties?.table_id] || []).length;
-                  return c ? ` — ${c} punch` : "";
-                })(),
-                { permanent: false, direction: "top", offset: [0, -8] }
-              );
-            }}
-            onEachFeature={(feature, layer) => {
-              layer.on("click", () => setSelected(feature.properties?.table_id || null));
-            }}
-          />
-        </MapContainer>
-      )}
-
-      {selectedTableId && (
-        <div
-          style={{
-            position: "absolute", right: 0, top: 0, bottom: 0, width: "40%",
-            background: "#111", color: "#fff", display: "flex", flexDirection: "column",
-            alignItems: "center", justifyContent: "center",
-            borderLeft: "2px solid #333", zIndex: 1000, padding: "12px 0"
+        {/* Siyah centroid noktaları */}
+        <GeoJSON
+          data={points}
+          pointToLayer={(f, latlng) =>
+            L.circleMarker(latlng, {
+              radius: 5,
+              color: "#000",
+              fillColor: "#000",
+              fillOpacity: 1,
+            })
+          }
+          onEachFeature={(f, layer) => {
+            const tid = getTableId(f.properties);
+            layer.on("click", () => setSelected(tid || null));
           }}
-        >
-          <h3 style={{ margin: "0 0 8px" }}>{selectedTableId}</h3>
+        />
+      </MapContainer>
 
-          <div style={{ position: "relative", width: "90%", maxHeight: "80vh" }}>
-            {isoError ? (
-              <div style={{ color: "#f00", textAlign: "center" }}>
-                İzometrik görüntü yüklenemedi. <code>public/photos/table_iso.png</code> dosyasını kontrol et.
-              </div>
-            ) : (
-              <img
-                ref={isoRef}
-                src="/photos/table_iso.png"
-                alt="Isometric"
-                style={{ width: "100%", borderRadius: 10, objectFit: "contain", cursor: "crosshair" }}
-                onLoad={() => { setIsoLoaded(true); setIsoError(false); }}
-                onError={() => { setIsoError(true); }}
-                onClick={handleIsoClick}
-              />
-            )}
+      {/* Sağ panel */}
+      {safeTableId && (
+        <div className="panel">
+          <h3>{safeTableId}</h3>
 
-            {(punches[selectedTableId] || []).map(p => (
+          <div
+            style={{
+              position: "relative",
+              width: "100%",
+              display: "flex",
+              justifyContent: "center",
+            }}
+          >
+            <img
+              ref={isoRef}
+              src="/photos/table_iso.png"
+              alt="Isometric"
+              onLoad={() => setIsoLoaded(true)}
+              onError={() => setIsoError(true)}
+              onClick={onIsoClick}
+            />
+
+            {(punches[safeTableId] || []).map((p) => (
               <div
                 key={p.id}
-                title="Punch"
                 style={{
                   position: "absolute",
                   left: `${p.isoX}%`,
                   top: `${p.isoY}%`,
-                  width: 10, height: 10,
+                  width: 10,
+                  height: 10,
                   background: "#f00",
                   borderRadius: "50%",
-                  transform: "translate(-50%, -50%)"
+                  transform: "translate(-50%, -50%)",
                 }}
               />
             ))}
-
-            {selectedPunch && (
-              <div
-                style={{
-                  position: "absolute",
-                  left: `${selectedPunch.isoX}%`,
-                  top: `${selectedPunch.isoY}%`,
-                  width: 14, height: 14,
-                  background: "#ff0",
-                  borderRadius: "50%",
-                  transform: "translate(-50%, -50%)",
-                  boxShadow: "0 0 10px rgba(255,255,0,0.8)"
-                }}
-              />
-            )}
           </div>
 
           {newPunch && (
-            <div style={{ marginTop: "1rem", textAlign: "center", width: "100%" }}>
+            <div style={{ width: "100%", textAlign: "center" }}>
               <input
                 type="text"
                 placeholder="Not ekle"
                 value={note}
-                onChange={e => setNote(e.target.value)}
+                onChange={(e) => setNote(e.target.value)}
               />
-              <input
-                type="file"
-                accept="image/*"
-                onChange={handlePhotoChange}
-              />
-              <div style={{ marginTop: 8 }}>
-                <button onClick={addPunch} style={{ padding: "0.5rem 1rem", background: "#4caf50", color: "#fff", border: "none", borderRadius: 6 }}>
+              <input type="file" accept="image/*" onChange={onPhoto} />
+              <div>
+                <button className="btn btn-green" onClick={addPunch}>
                   Punch Ekle
                 </button>
-                <button onClick={() => setNewPunch(null)} style={{ padding: "0.5rem 1rem", background: "#f44336", color: "#fff", border: "none", borderRadius: 6, marginLeft: "1rem" }}>
+                <button
+                  className="btn btn-red"
+                  onClick={() => setNewPunch(null)}
+                >
                   İptal
                 </button>
               </div>
             </div>
           )}
 
-          {photo && <img src={photo} alt="Punch Photo Preview" style={{ width: "50%", marginTop: "1rem", borderRadius: 10 }} />}
+          {photo && (
+            <img
+              src={photo}
+              alt="preview"
+              style={{ width: "45%", marginTop: 8, borderRadius: 10 }}
+            />
+          )}
 
-          <button
-            onClick={() => {
-              setSelected(null);        // paneli kapat
-              setIsoLoaded(false);
-              setIsoError(false);
-              // panel kapanınca kırmızı noktalar zaten punchLayer’da görünmeye devam ediyor
-            }}
-            style={{ marginTop: "1rem", padding: "0.5rem 1rem", background: "#444", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}
-          >
+          <button className="btn btn-gray" onClick={() => setSelected(null)}>
             Close
           </button>
         </div>
