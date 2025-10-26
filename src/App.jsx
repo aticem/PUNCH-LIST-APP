@@ -1,12 +1,36 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { MapContainer, TileLayer, GeoJSON } from "react-leaflet";
+import { MapContainer, TileLayer, GeoJSON, useMap } from "react-leaflet";
 import L from "leaflet";
+import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
+import { point } from "@turf/turf";
 
-// ✅ public klasöründeki dosyalar ?url ile import edilir
 import tablesPolyUrl from "/tables_poly.geojson?url";
 import tablesPointsUrl from "/tables_points.geojson?url";
 
-/* -------------------- yardımcı fonksiyonlar -------------------- */
+/* -------------------- MASA KİMLİĞİ BUL -------------------- */
+function getTableId(props) {
+  if (!props) return null;
+  if (props.table_id) return props.table_id;
+  if (props.tableId) return props.tableId;
+  if (props.id !== undefined) return String(props.id);
+  if (props.name) return props.name;
+  if (props.masa_id) return props.masa_id;
+  if (props.masa_kodu) return props.masa_kodu;
+  if (props.kod) return props.kod;
+  for (const key in props) {
+    const val = props[key];
+    if (typeof val === "string" && /^R\d{1,3}_T\d{1,3}$/i.test(val.trim())) {
+      return val.trim().toUpperCase();
+    }
+  }
+  for (const key in props) {
+    const val = props[key];
+    if (typeof val === "string" && val.trim()) return val.trim();
+  }
+  return null;
+}
+
+/* -------------------- YARDIMCI FONKSİYONLAR -------------------- */
 function getSafeCenter(geojson) {
   try {
     const feats = geojson?.features || [];
@@ -25,31 +49,104 @@ function getSafeCenter(geojson) {
   }
 }
 
-function scatterOffsets(count, radius = 0.00006) {
-  const arr = [];
-  for (let i = 0; i < count; i++) {
-    const angle = (i / count) * 2 * Math.PI;
-    const dist = radius * (0.55 + Math.random() * 0.45);
-    arr.push([Math.cos(angle) * dist, Math.sin(angle) * dist]);
+// Poligon içinde rastgele nokta üret (SADECE BİR KEZ!)
+function generatePointInsidePolygon(polygon, maxTries = 100) {
+  const bbox = L.geoJSON(polygon).getBounds();
+  const sw = bbox.getSouthWest();
+  const ne = bbox.getNorthEast();
+
+  for (let i = 0; i < maxTries; i++) {
+    const lng = sw.lng + Math.random() * (ne.lng - sw.lng);
+    const lat = sw.lat + Math.random() * (ne.lat - sw.lat);
+    const pt = point([lng, lat]);
+    if (booleanPointInPolygon(pt, polygon)) {
+      return [lat, lng];
+    }
   }
-  return arr;
+  // Son çare: centroid
+  const coords = polygon.geometry.coordinates[0];
+  const sumLat = coords.reduce((s, c) => s + c[1], 0);
+  const sumLng = coords.reduce((s, c) => s + c[0], 0);
+  return [sumLat / coords.length, sumLng / coords.length];
 }
 
-function getTableId(props) {
-  return (
-    props?.table_id ??
-    props?.tableId ??
-    props?.id ??
-    props?.name ??
-    null
-  );
+// İzometrik tıklama → gerçek dünya koordinatı
+function isoClickToLatLng(polyFeature, isoX, isoY) {
+  const bbox = L.geoJSON(polyFeature).getBounds();
+  const sw = bbox.getSouthWest();
+  const ne = bbox.getNorthEast();
+
+  const lng = sw.lng + (isoX / 100) * (ne.lng - sw.lng);
+  const lat = sw.lat + (1 - isoY / 100) * (ne.lat - sw.lat);
+
+  const pt = point([lng, lat]);
+  if (booleanPointInPolygon(pt, polyFeature)) {
+    return [lat, lng];
+  }
+
+  return generatePointInsidePolygon(polyFeature);
 }
 
-/* -------------------- ana component -------------------- */
+/* -------------------- PUNCH LAYER (SABİT NOKTALAR) -------------------- */
+function PunchLayer({ points, punches, polyGeoJSON }) {
+  const map = useMap();
+  const layerRef = useRef(null);
+  const polyIndexRef = useRef({});
+  const punchLocationsRef = useRef({}); // SABİT KOORDİNATLAR İÇİN
+
+  useEffect(() => {
+    if (!polyGeoJSON) return;
+    const index = {};
+    polyGeoJSON.features.forEach(f => {
+      const tid = getTableId(f.properties);
+      if (tid) index[tid] = f;
+    });
+    polyIndexRef.current = index;
+  }, [polyGeoJSON]);
+
+  useEffect(() => {
+    if (!layerRef.current) layerRef.current = L.layerGroup().addTo(map);
+    return () => layerRef.current && layerRef.current.remove();
+  }, [map]);
+
+  useEffect(() => {
+    const layer = layerRef.current;
+    const polyIndex = polyIndexRef.current;
+    if (!layer || !points || !polyGeoJSON) return;
+    layer.clearLayers();
+
+    // Her masa için punch'ları işle
+    Object.keys(punches).forEach(tid => {
+      const polygon = polyIndex[tid];
+      if (!polygon) return;
+
+      const list = punches[tid] || [];
+
+      list.forEach((p) => {
+        // EĞER latlng YOKSA, BİR KEZ ÜRET VE KAYDET
+        if (!p.latlng) {
+          if (!punchLocationsRef.current[p.id]) {
+            punchLocationsRef.current[p.id] = generatePointInsidePolygon(polygon);
+          }
+          p.latlng = punchLocationsRef.current[p.id];
+        }
+
+        L.circleMarker(p.latlng, {
+          radius: 2.5,
+          color: "#fff",
+          weight: 1.2,
+          fillColor: "#f00",
+          fillOpacity: 1,
+        }).addTo(layer);
+      });
+    });
+  }, [points, punches, polyGeoJSON, map]);
+
+  return null;
+}
+
+/* -------------------- ANA COMPONENT -------------------- */
 export default function App() {
-  const mapRef = useRef(null);
-  const punchLayerRef = useRef(null);
-
   const [poly, setPoly] = useState(null);
   const [points, setPoints] = useState(null);
   const [punches, setPunches] = useState({});
@@ -61,85 +158,42 @@ export default function App() {
   const [isoLoaded, setIsoLoaded] = useState(false);
   const [isoError, setIsoError] = useState(false);
 
-  /* -------------------- GeoJSON verilerini yükle (?url yöntemiyle) -------------------- */
   useEffect(() => {
     Promise.all([
-      fetch(tablesPolyUrl).then((r) => r.json()),
-      fetch(tablesPointsUrl).then((r) => r.json()),
+      fetch(tablesPolyUrl).then(r => r.json()),
+      fetch(tablesPointsUrl).then(r => r.json()),
     ])
       .then(([polyData, pointsData]) => {
         setPoly(polyData);
         setPoints(pointsData);
-        console.log("✅ GeoJSON loaded via ?url import");
       })
-      .catch((err) => console.error("GeoJSON load error", err));
+      .catch(err => console.error("GeoJSON error", err));
   }, []);
 
-  /* -------------------- localStorage -------------------- */
   useEffect(() => {
     const s = localStorage.getItem("punches");
     if (s) setPunches(JSON.parse(s));
   }, []);
+
   useEffect(() => {
     localStorage.setItem("punches", JSON.stringify(punches));
   }, [punches]);
 
   const initialCenter = useMemo(() => getSafeCenter(points), [points]);
+  const safeTableId = typeof selected === "string" ? selected : null;
 
-  const handleMapCreate = (map) => {
-    mapRef.current = map;
-    if (!punchLayerRef.current) {
-      punchLayerRef.current = L.layerGroup().addTo(map);
-    }
-  };
-
-  /* -------------------- haritada kırmızı punch noktaları -------------------- */
-  useEffect(() => {
-    const layer = punchLayerRef.current;
-    if (!layer || !points) return;
-    layer.clearLayers();
-
-    points.features.forEach((f) => {
-      const tid = getTableId(f.properties);
-      if (!tid) return;
-      const list = punches[tid] || [];
-      if (!list.length) return;
-
-      const [lon, lat] = f.geometry.coordinates;
-      const offs = scatterOffsets(list.length, 0.00006);
-      list.forEach((p, i) => {
-        const [dx, dy] = offs[i];
-        const m = L.circleMarker([lat + dy, lon + dx], {
-          radius: 3.5,
-          color: "#f00",
-          fillColor: "#f00",
-          fillOpacity: 1,
-          weight: 1,
-        }).on("click", () => setSelected({ tableId: tid, punchId: p.id }));
-        layer.addLayer(m);
-      });
-    });
-
-    console.log(
-      "🔴 rendered punch dots:",
-      Object.values(punches).reduce((a, v) => a + v.length, 0)
-    );
-  }, [punches, points]);
-
-  const safeTableId =
-    typeof selected === "object" && selected !== null
-      ? selected.tableId
-      : typeof selected === "string"
-      ? selected
-      : null;
-
-  /* -------------------- izometrik etkileşimleri -------------------- */
   const onIsoClick = (e) => {
     if (!isoRef.current || !isoLoaded || isoError || !safeTableId) return;
     const rect = isoRef.current.getBoundingClientRect();
     const isoX = ((e.clientX - rect.left) / rect.width) * 100;
     const isoY = ((e.clientY - rect.top) / rect.height) * 100;
-    setNewPunch({ table_id: safeTableId, isoX, isoY });
+
+    const polyFeature = poly?.features.find(f => getTableId(f.properties) === safeTableId);
+    if (!polyFeature) return;
+
+    const latlng = isoClickToLatLng(polyFeature, isoX, isoY);
+
+    setNewPunch({ table_id: safeTableId, isoX, isoY, latlng });
   };
 
   const onPhoto = (e) => {
@@ -151,7 +205,7 @@ export default function App() {
   };
 
   const addPunch = () => {
-    if (!newPunch || !newPunch.table_id) return;
+    if (!newPunch || !newPunch.table_id || !newPunch.latlng) return;
     const id = Date.now();
     const record = {
       id,
@@ -159,8 +213,9 @@ export default function App() {
       isoY: newPunch.isoY,
       note,
       photo,
+      latlng: newPunch.latlng  // SABİT KOORDİNAT
     };
-    setPunches((prev) => ({
+    setPunches(prev => ({
       ...prev,
       [newPunch.table_id]: [...(prev[newPunch.table_id] || []), record],
     }));
@@ -169,68 +224,58 @@ export default function App() {
     setPhoto(null);
   };
 
+  const deleteAllPunches = () => {
+    if (!safeTableId) return;
+    if (!window.confirm(`${safeTableId} için TÜM punch'lar silinecek. Emin misin?`)) return;
+
+    setPunches(prev => {
+      const updated = { ...prev };
+      delete updated[safeTableId];
+      return updated;
+    });
+  };
+
   if (!points || !poly) {
     return (
-      <div style={{ background: "#111", color: "#fff", padding: 12 }}>
-        <b>Loading data...</b>
+      <div style={{ background: "#111", color: "#fff", padding: 12, textAlign: "center", height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <b>Loading GeoJSON...</b>
       </div>
     );
   }
 
-  /* -------------------- render -------------------- */
   return (
     <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
       <MapContainer
-        whenCreated={handleMapCreate}
-        style={{ height: "100%", width: "100%" }}
         center={initialCenter}
         zoom={18}
         minZoom={14}
         maxZoom={22}
+        style={{ height: "100%", width: "100%" }}
         preferCanvas
       >
-        <TileLayer
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          attribution="&copy; OpenStreetMap"
-        />
+        <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; OpenStreetMap' />
 
-        {/* Gri masa alanları */}
+        {/* POLİGON TIKLAMA */}
         <GeoJSON
           data={poly}
-          style={{ color: "#333", weight: 1, opacity: 0.6, fillOpacity: 0.05 }}
-        />
-
-        {/* Siyah centroid noktaları */}
-        <GeoJSON
-          data={points}
-          pointToLayer={(f, latlng) =>
-            L.circleMarker(latlng, {
-              radius: 5,
-              color: "#000",
-              fillColor: "#000",
-              fillOpacity: 1,
-            })
-          }
-          onEachFeature={(f, layer) => {
-            const tid = getTableId(f.properties);
-            layer.on("click", () => setSelected(tid || null));
+          style={{ color: "#333", weight: 2, opacity: 0.8, fillOpacity: 0.1 }}
+          onEachFeature={(feature, layer) => {
+            const tid = getTableId(feature.properties);
+            if (tid) {
+              layer.on("click", () => setSelected(tid));
+            }
           }}
         />
+
+        <PunchLayer points={points} punches={punches} polyGeoJSON={poly} />
       </MapContainer>
 
-      {/* Sağ panel */}
+      {/* PANEL */}
       {safeTableId && (
         <div className="panel">
           <h3>{safeTableId}</h3>
 
-          <div
-            style={{
-              position: "relative",
-              width: "100%",
-              display: "flex",
-              justifyContent: "center",
-            }}
-          >
+          <div style={{ position: "relative", width: "100%", display: "flex", justifyContent: "center" }}>
             <img
               ref={isoRef}
               src="/photos/table_iso.png"
@@ -238,9 +283,9 @@ export default function App() {
               onLoad={() => setIsoLoaded(true)}
               onError={() => setIsoError(true)}
               onClick={onIsoClick}
+              style={{ cursor: isoLoaded && !isoError ? 'crosshair' : 'default', width: "90%", borderRadius: 10 }}
             />
-
-            {(punches[safeTableId] || []).map((p) => (
+            {(punches[safeTableId] || []).map(p => (
               <div
                 key={p.id}
                 style={{
@@ -252,44 +297,33 @@ export default function App() {
                   background: "#f00",
                   borderRadius: "50%",
                   transform: "translate(-50%, -50%)",
+                  border: "1.5px solid #fff",
+                  boxShadow: "0 0 3px rgba(0,0,0,0.4)"
                 }}
               />
             ))}
           </div>
 
+          {(punches[safeTableId]?.length > 0) && (
+            <button className="btn btn-red" onClick={deleteAllPunches} style={{ margin: "16px auto", display: "block", width: "80%", fontWeight: "bold", padding: "10px" }}>
+              Tümünü Sil
+            </button>
+          )}
+
           {newPunch && (
-            <div style={{ width: "100%", textAlign: "center" }}>
-              <input
-                type="text"
-                placeholder="Not ekle"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-              />
-              <input type="file" accept="image/*" onChange={onPhoto} />
-              <div>
-                <button className="btn btn-green" onClick={addPunch}>
-                  Punch Ekle
-                </button>
-                <button
-                  className="btn btn-red"
-                  onClick={() => setNewPunch(null)}
-                >
-                  İptal
-                </button>
+            <div style={{ width: "100%", textAlign: "center", marginTop: 12 }}>
+              <input type="text" placeholder="Not (opsiyonel)" value={note} onChange={e => setNote(e.target.value)} style={{ width: "80%", margin: "6px auto", padding: 8, borderRadius: 6, border: "1px solid #444", background: "#222", color: "#fff" }} />
+              <input type="file" accept="image/*" onChange={onPhoto} style={{ display: "block", margin: "6px auto" }} />
+              {photo && <img src={photo} alt="preview" style={{ width: "50%", margin: "8px auto", borderRadius: 8, display: "block" }} />}
+              <div style={{ marginTop: 8 }}>
+                <button className="btn btn-green" onClick={addPunch}>Punch Ekle</button>
+                <button className="btn btn-red" onClick={() => { setNewPunch(null); setNote(""); setPhoto(null); }}>İptal</button>
               </div>
             </div>
           )}
 
-          {photo && (
-            <img
-              src={photo}
-              alt="preview"
-              style={{ width: "45%", marginTop: 8, borderRadius: 10 }}
-            />
-          )}
-
-          <button className="btn btn-gray" onClick={() => setSelected(null)}>
-            Close
+          <button className="btn btn-gray" onClick={() => setSelected(null)} style={{ marginTop: 16, width: "80%", padding: "10px" }}>
+            Kapat
           </button>
         </div>
       )}
