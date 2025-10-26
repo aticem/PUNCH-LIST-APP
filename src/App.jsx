@@ -30,6 +30,11 @@ function getTableId(props) {
   return null;
 }
 
+/* -------------------- YARDIMCI FONKSİYON: PUNCH SAYISI -------------------- */
+function getPunchCount(punches, tableId) {
+  return (punches[tableId] || []).length;
+}
+
 /* -------------------- YARDIMCI FONKSİYONLAR -------------------- */
 function getSafeCenter(geojson) {
   try {
@@ -63,7 +68,6 @@ function generatePointInsidePolygon(polygon, maxTries = 100) {
       return [lat, lng];
     }
   }
-  // Son çare: centroid
   const coords = polygon.geometry.coordinates[0];
   const sumLat = coords.reduce((s, c) => s + c[1], 0);
   const sumLng = coords.reduce((s, c) => s + c[0], 0);
@@ -88,11 +92,11 @@ function isoClickToLatLng(polyFeature, isoX, isoY) {
 }
 
 /* -------------------- PUNCH LAYER (SABİT NOKTALAR) -------------------- */
-function PunchLayer({ points, punches, polyGeoJSON }) {
+function PunchLayer({ punches, polyGeoJSON }) {
   const map = useMap();
   const layerRef = useRef(null);
   const polyIndexRef = useRef({});
-  const punchLocationsRef = useRef({}); // SABİT KOORDİNATLAR İÇİN
+  const punchLocationsRef = useRef({});
 
   useEffect(() => {
     if (!polyGeoJSON) return;
@@ -112,10 +116,9 @@ function PunchLayer({ points, punches, polyGeoJSON }) {
   useEffect(() => {
     const layer = layerRef.current;
     const polyIndex = polyIndexRef.current;
-    if (!layer || !points || !polyGeoJSON) return;
+    if (!layer || !polyGeoJSON) return;
     layer.clearLayers();
 
-    // Her masa için punch'ları işle
     Object.keys(punches).forEach(tid => {
       const polygon = polyIndex[tid];
       if (!polygon) return;
@@ -123,7 +126,6 @@ function PunchLayer({ points, punches, polyGeoJSON }) {
       const list = punches[tid] || [];
 
       list.forEach((p) => {
-        // EĞER latlng YOKSA, BİR KEZ ÜRET VE KAYDET
         if (!p.latlng) {
           if (!punchLocationsRef.current[p.id]) {
             punchLocationsRef.current[p.id] = generatePointInsidePolygon(polygon);
@@ -140,7 +142,7 @@ function PunchLayer({ points, punches, polyGeoJSON }) {
         }).addTo(layer);
       });
     });
-  }, [points, punches, polyGeoJSON, map]);
+  }, [punches, polyGeoJSON, map]);
 
   return null;
 }
@@ -182,6 +184,11 @@ export default function App() {
   const initialCenter = useMemo(() => getSafeCenter(points), [points]);
   const safeTableId = typeof selected === "string" ? selected : null;
 
+  // punch değiştiğinde GeoJSON yeniden render olsun
+  const punchVersion = useMemo(() => {
+    return Object.values(punches).flat().length;
+  }, [punches]);
+
   const onIsoClick = (e) => {
     if (!isoRef.current || !isoLoaded || isoError || !safeTableId) return;
     const rect = isoRef.current.getBoundingClientRect();
@@ -213,15 +220,13 @@ export default function App() {
       isoY: newPunch.isoY,
       note,
       photo,
-      latlng: newPunch.latlng  // SABİT KOORDİNAT
+      latlng: newPunch.latlng
     };
     setPunches(prev => ({
       ...prev,
       [newPunch.table_id]: [...(prev[newPunch.table_id] || []), record],
     }));
-    setNewPunch(null);
-    setNote("");
-    setPhoto(null);
+    setNewPunch(null); setNote(""); setPhoto(null);
   };
 
   const deleteAllPunches = () => {
@@ -246,6 +251,7 @@ export default function App() {
   return (
     <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
       <MapContainer
+        key={punchVersion}  // punch değiştiğinde harita yeniden render olur
         center={initialCenter}
         zoom={18}
         minZoom={14}
@@ -255,22 +261,66 @@ export default function App() {
       >
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" attribution='&copy; OpenStreetMap' />
 
-        {/* POLİGON TIKLAMA */}
         <GeoJSON
+          key={`poly-${punchVersion}`}  // her punch'ta tooltip yeniden hesaplanır
           data={poly}
-          style={{ color: "#333", weight: 2, opacity: 0.8, fillOpacity: 0.1 }}
+          style={(feature) => {
+            const tid = getTableId(feature.properties);
+            const isSelected = tid === safeTableId;
+            const hasPunch = tid && getPunchCount(punches, tid) > 0;
+            return {
+              color: isSelected ? "#007bff" : hasPunch ? "#d32f2f" : "#333",
+              weight: isSelected ? 3 : hasPunch ? 2.5 : 2,
+              opacity: 1,
+              fillOpacity: isSelected ? 0.25 : hasPunch ? 0.15 : 0.1,
+              fillColor: isSelected ? "#007bff" : hasPunch ? "#d32f2f" : "#666",
+            };
+          }}
           onEachFeature={(feature, layer) => {
             const tid = getTableId(feature.properties);
-            if (tid) {
-              layer.on("click", () => setSelected(tid));
-            }
+            if (!tid) return;
+
+            const punchCount = getPunchCount(punches, tid);
+
+            const tooltipContent = `
+              <div style="font-weight:600; font-size:14px;">${tid}</div>
+              <div style="font-size:12px; opacity:0.9; margin-top:2px;">
+                Punch: <strong>${punchCount}</strong>
+              </div>
+            `;
+
+            layer.bindTooltip(tooltipContent, {
+              permanent: false,
+              direction: "top",
+              className: "leaflet-tooltip-custom",
+              offset: [0, -10],
+            });
+
+            layer.on({
+              mouseover: () => {
+                layer.setStyle({
+                  weight: 4,
+                  fillOpacity: 0.3,
+                  color: "#007bff",
+                });
+                layer.openTooltip();
+              },
+              mouseout: () => {
+                layer.setStyle({
+                  color: tid === safeTableId ? "#007bff" : punchCount > 0 ? "#d32f2f" : "#333",
+                  weight: tid === safeTableId ? 3 : punchCount > 0 ? 2.5 : 2,
+                  fillOpacity: tid === safeTableId ? 0.25 : punchCount > 0 ? 0.15 : 0.1,
+                });
+                layer.closeTooltip();
+              },
+              click: () => setSelected(tid),
+            });
           }}
         />
 
-        <PunchLayer points={points} punches={punches} polyGeoJSON={poly} />
+        <PunchLayer punches={punches} polyGeoJSON={poly} />
       </MapContainer>
 
-      {/* PANEL */}
       {safeTableId && (
         <div className="panel">
           <h3>{safeTableId}</h3>
