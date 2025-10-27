@@ -1,6 +1,12 @@
 // src/App.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { MapContainer, TileLayer, GeoJSON, useMap, useMapEvents } from "react-leaflet";
+import {
+  MapContainer,
+  TileLayer,
+  GeoJSON,
+  useMap,
+  useMapEvents,
+} from "react-leaflet";
 import L from "leaflet";
 import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
 import { point } from "@turf/turf";
@@ -88,18 +94,53 @@ function isoClickToLatLng(polyFeature, isoX, isoY) {
 }
 
 /* -------------------- PAN KONTROL (ORTA TIK) -------------------- */
-function PanControl() {
+/* -------------------- PAN KONTROL + SAĞ TIK UNSELECT -------------------- */
+function PanControl({ onRightClick }) {
   const map = useMap();
-  useMapEvents({
-    mousedown: (e) => {
-      if (e.originalEvent.button === 1) map.dragging.enable();
-    },
-    mouseup: (e) => {
-      if (e.originalEvent.button === 1) map.dragging.disable();
-    },
-  });
+  const container = map.getContainer();
+
+  useEffect(() => {
+    if (!container) return;
+
+    // Varsayılan imleç: klasik ok
+    container.style.cursor = "default";
+
+    // Orta tuş (scroll) basıldığında el imleci aktif
+    const handleMouseDown = (e) => {
+      if (e.button === 1) {
+        container.style.cursor = "grabbing";
+        map.dragging.enable();
+      }
+      // Sağ tık
+      if (e.button === 2 && typeof onRightClick === "function") {
+        e.preventDefault();
+        onRightClick(); // unselect callback
+      }
+    };
+
+    const handleMouseUp = (e) => {
+      if (e.button === 1) {
+        container.style.cursor = "default";
+        map.dragging.disable();
+      }
+    };
+
+    // Event listener'lar
+    container.addEventListener("mousedown", handleMouseDown);
+    container.addEventListener("mouseup", handleMouseUp);
+
+    // Sağ tık menüsünü engelle (harita üstünde)
+    container.addEventListener("contextmenu", (e) => e.preventDefault());
+
+    return () => {
+      container.removeEventListener("mousedown", handleMouseDown);
+      container.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [map, container, onRightClick]);
+
   return null;
 }
+
 
 /* -------------------- PUNCH LAYER -------------------- */
 function PunchLayer({ punches, polyGeoJSON }) {
@@ -125,12 +166,11 @@ function PunchLayer({ punches, polyGeoJSON }) {
 
   useEffect(() => {
     const layer = layerRef.current;
-    const polyIndex = polyIndexRef.current;
     if (!layer || !polyGeoJSON) return;
     layer.clearLayers();
 
     Object.keys(punches).forEach((tid) => {
-      const polygon = polyIndex[tid];
+      const polygon = polyIndexRef.current[tid];
       if (!polygon) return;
       const list = punches[tid] || [];
       list.forEach((p) => {
@@ -163,11 +203,9 @@ function SelectionControl({
   isSelecting,
   setSelected,
 }) {
-  const map = useMap();
   const isDragging = useRef(false);
   const clickStartTime = useRef(0);
   const clickStartPos = useRef(null);
-
   useMapEvents({
     mousedown: (e) => {
       if (e.originalEvent.button === 0) {
@@ -220,15 +258,16 @@ function SelectionControl({
         if (duration < 250 && !moved) {
           const latlng = e.latlng;
           const pt = point([latlng.lng, latlng.lat]);
+          let found = null;
           poly.features.forEach((f) => {
             const tid = getTableId(f.properties);
-            if (tid && booleanPointInPolygon(pt, f)) setSelected(tid);
+            if (tid && booleanPointInPolygon(pt, f)) found = tid;
           });
+          if (found) setSelected(found);
         }
       }
     },
   });
-
   return null;
 }
 
@@ -243,9 +282,13 @@ export default function App() {
   const [photo, setPhoto] = useState(null);
   const [multiSelected, setMultiSelected] = useState(new Set());
   const [isSelecting, setIsSelecting] = useState(false);
+
   const isoRef = useRef(null);
   const [isoLoaded, setIsoLoaded] = useState(false);
   const [isoError, setIsoError] = useState(false);
+
+  // 🆕 Eklenen state: izometrikteki kırmızı noktaya tıklayınca detay gösterimi
+  const [selectedPunch, setSelectedPunch] = useState(null);
 
   useEffect(() => {
     Promise.all([
@@ -282,12 +325,15 @@ export default function App() {
 
   const onIsoClick = (e) => {
     if (!isoRef.current || !isoLoaded || isoError || !safeTableId) return;
+    // Eğer punch popup açıkken arka görsel tıklanırsa kapat (daha doğal UX)
+    if (selectedPunch) {
+      setSelectedPunch(null);
+      return;
+    }
     const rect = isoRef.current.getBoundingClientRect();
     const isoX = ((e.clientX - rect.left) / rect.width) * 100;
     const isoY = ((e.clientY - rect.top) / rect.height) * 100;
-    const polyFeature = poly?.features.find(
-      (f) => getTableId(f.properties) === safeTableId
-    );
+    const polyFeature = poly?.features.find((f) => getTableId(f.properties) === safeTableId);
     if (!polyFeature) return;
     const latlng = isoClickToLatLng(polyFeature, isoX, isoY);
     setNewPunch({ table_id: safeTableId, isoX, isoY, latlng });
@@ -304,7 +350,14 @@ export default function App() {
   const addPunch = () => {
     if (!newPunch || !newPunch.table_id || !newPunch.latlng) return;
     const id = Date.now();
-    const record = { id, isoX: newPunch.isoX, isoY: newPunch.isoY, note, photo, latlng: newPunch.latlng };
+    const record = {
+      id,
+      isoX: newPunch.isoX,
+      isoY: newPunch.isoY,
+      note,
+      photo,
+      latlng: newPunch.latlng,
+    };
     setPunches((prev) => ({
       ...prev,
       [newPunch.table_id]: [...(prev[newPunch.table_id] || []), record],
@@ -405,7 +458,8 @@ export default function App() {
         dragging={false}
       >
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-        <PanControl />
+        <PanControl onRightClick={clearSelection} />
+
         <SelectionControl
           poly={poly}
           multiSelected={multiSelected}
@@ -419,7 +473,7 @@ export default function App() {
           data={poly}
           style={(feature) => {
             const tid = getTableId(feature.properties);
-            const isSelected = tid === safeTableId;
+            const isSelected = tid === (typeof selected === "string" ? selected : null);
             const isMulti = multiSelected.has(tid);
             const hasPunch = getPunchCount(punches, tid) > 0;
             return {
@@ -455,7 +509,15 @@ export default function App() {
       {safeTableId && (
         <div className="panel">
           <h3>{safeTableId}</h3>
-          <div style={{ position: "relative", width: "100%", display: "flex", justifyContent: "center" }}>
+
+          <div
+            style={{
+              position: "relative",
+              width: "100%",
+              display: "flex",
+              justifyContent: "center",
+            }}
+          >
             <img
               ref={isoRef}
               src="/photos/table_iso.png"
@@ -463,11 +525,23 @@ export default function App() {
               onLoad={() => setIsoLoaded(true)}
               onError={() => setIsoError(true)}
               onClick={onIsoClick}
-              style={{ cursor: isoLoaded && !isoError ? "crosshair" : "default", width: "90%", borderRadius: 10 }}
+              style={{
+                cursor: isoLoaded && !isoError ? "crosshair" : "default",
+                width: "90%",
+                borderRadius: 10,
+              }}
             />
+
+            {/* İzometrik üzerindeki mevcut punch noktaları */}
             {(punches[safeTableId] || []).map((p) => (
               <div
                 key={p.id}
+                role="button"
+                title={p.note || "Punch"}
+                onClick={(e) => {
+                  e.stopPropagation(); // img tıklamasına düşmesin
+                  setSelectedPunch(p);
+                }}
                 style={{
                   position: "absolute",
                   left: `${p.isoX}%`,
@@ -479,14 +553,96 @@ export default function App() {
                   transform: "translate(-50%, -50%)",
                   border: "1.5px solid #fff",
                   boxShadow: "0 0 3px rgba(0,0,0,0.4)",
+                  cursor: "pointer",
                 }}
               />
             ))}
+
+            {/* 🆕 Punch Detay Popup (not + foto) */}
+            {selectedPunch && (
+              <div
+                onClick={(e) => e.stopPropagation()} // içe tıklayınca kapanmasın
+                style={{
+                  position: "absolute",
+                  left: `${selectedPunch.isoX}%`,
+                  top: `${selectedPunch.isoY - 4}%`,
+                  transform: "translate(-50%, -100%)",
+                  background: "rgba(0,0,0,0.9)",
+                  color: "#fff",
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  fontSize: 13,
+                  zIndex: 20,
+                  minWidth: 180,
+                  maxWidth: 240,
+                  boxShadow: "0 6px 18px rgba(0,0,0,0.35)",
+                  border: "1px solid rgba(255,255,255,0.08)",
+                  backdropFilter: "blur(4px)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    marginBottom: 6,
+                    gap: 8,
+                  }}
+                >
+                  <strong style={{ fontSize: 12 }}>Punch Detayı</strong>
+                  <button
+                    onClick={() => setSelectedPunch(null)}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "#fff",
+                      fontSize: 16,
+                      cursor: "pointer",
+                      lineHeight: 1,
+                    }}
+                    aria-label="Kapat"
+                  >
+                    ×
+                  </button>
+                </div>
+
+                {selectedPunch.photo && (
+                  <img
+                    src={selectedPunch.photo}
+                    alt="Punch"
+                    style={{
+                      width: "100%",
+                      borderRadius: 8,
+                      marginBottom: 6,
+                      display: "block",
+                    }}
+                  />
+                )}
+
+                <div
+                  style={{
+                    fontSize: 12.5,
+                    lineHeight: 1.35,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-word",
+                    opacity: 0.95,
+                  }}
+                >
+                  {selectedPunch.note && selectedPunch.note.trim()
+                    ? selectedPunch.note
+                    : "(Not yok)"}
+                </div>
+              </div>
+            )}
           </div>
+
           {(punches[safeTableId]?.length ?? 0) > 0 && (
             <button
               className="btn btn-red"
-              onClick={deleteAllPunches}
+              onClick={() => {
+                setSelectedPunch(null); // toplu silmeden önce popup'ı kapat
+                deleteAllPunches();
+              }}
               style={{
                 margin: "16px auto",
                 display: "block",
@@ -498,6 +654,7 @@ export default function App() {
               Tümünü Sil
             </button>
           )}
+
           {newPunch && (
             <div style={{ width: "100%", textAlign: "center", marginTop: 12 }}>
               <input
@@ -515,7 +672,12 @@ export default function App() {
                   color: "#fff",
                 }}
               />
-              <input type="file" accept="image/*" onChange={onPhoto} style={{ display: "block", margin: "6px auto" }} />
+              <input
+                type="file"
+                accept="image/*"
+                onChange={onPhoto}
+                style={{ display: "block", margin: "6px auto" }}
+              />
               {photo && (
                 <img
                   src={photo}
@@ -529,14 +691,31 @@ export default function App() {
                 />
               )}
               <div style={{ marginTop: 8 }}>
-                <button className="btn btn-green" onClick={addPunch}>Punch Ekle</button>
-                <button className="btn btn-red" onClick={() => { setNewPunch(null); setNote(""); setPhoto(null); }}>
+                <button className="btn btn-green" onClick={addPunch}>
+                  Punch Ekle
+                </button>
+                <button
+                  className="btn btn-red"
+                  onClick={() => {
+                    setNewPunch(null);
+                    setNote("");
+                    setPhoto(null);
+                  }}
+                >
                   İptal
                 </button>
               </div>
             </div>
           )}
-          <button className="btn btn-gray" onClick={() => setSelected(null)} style={{ marginTop: 16, width: "80%", padding: "10px" }}>
+
+          <button
+            className="btn btn-gray"
+            onClick={() => {
+              setSelectedPunch(null);
+              setSelected(null);
+            }}
+            style={{ marginTop: 16, width: "80%", padding: "10px" }}
+          >
             Kapat
           </button>
         </div>
