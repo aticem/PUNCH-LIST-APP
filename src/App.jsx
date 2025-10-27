@@ -93,54 +93,108 @@ function isoClickToLatLng(polyFeature, isoX, isoY) {
   return generatePointInsidePolygon(polyFeature);
 }
 
-/* -------------------- PAN KONTROL (ORTA TIK) -------------------- */
-/* -------------------- PAN KONTROL + SAĞ TIK UNSELECT -------------------- */
-function PanControl({ onRightClick }) {
+/* -------------------- PAN KONTROL + SAĞ TIK UNSELECT (SADECE İSTENEN DAVRANIŞ) -------------------- */
+/* - Orta tuş basılı → pan (dragging enable), bırakınca disable
+   - Sağ tuş tek tık: altındaki masa SEÇİLİ ise unselect, değilse hiçbir şey yapma
+   - Sağ tuş basılı sürükle: gezdiği sürece altındaki SEÇİLİ masaları unselect et
+   - Sağ tık pan yapmaz, sadece unselect mantığı çalışır */
+function PanControl({ poly, multiSelected, setMultiSelected, setSelected }) {
   const map = useMap();
   const container = map.getContainer();
+  const isRightDragging = useRef(false);
+
+  function findTableAtLatLng(latlng) {
+    const pt = point([latlng.lng, latlng.lat]);
+    for (const f of poly.features) {
+      const tid = getTableId(f.properties);
+      if (tid && booleanPointInPolygon(pt, f)) return tid;
+    }
+    return null;
+  }
 
   useEffect(() => {
     if (!container) return;
 
-    // Varsayılan imleç: klasik ok
+    // Başlangıçta pan kapalı; orta tuş ile açacağız
+    map.dragging.disable();
     container.style.cursor = "default";
 
-    // Orta tuş (scroll) basıldığında el imleci aktif
     const handleMouseDown = (e) => {
+      // Orta tuş → pan başlasın
       if (e.button === 1) {
+        e.preventDefault();
         container.style.cursor = "grabbing";
         map.dragging.enable();
       }
-      // Sağ tık
-      if (e.button === 2 && typeof onRightClick === "function") {
+
+      // Sağ tuş → sadece unselect davranışı
+      if (e.button === 2) {
         e.preventDefault();
-        onRightClick(); // unselect callback
+        isRightDragging.current = true;
+
+        const latlng = map.mouseEventToLatLng(e);
+        const tid = findTableAtLatLng(latlng);
+
+        // SADECE seçiliyse unselect
+        if (tid && multiSelected.has(tid)) {
+          setMultiSelected((prev) => {
+            const next = new Set(prev);
+            next.delete(tid);
+            return next;
+          });
+          // Eğer sadece bir tane seçili masa kalmışsa ve onu da kaldırdıysa, detay panelini kapat
+          if (multiSelected.size === 1) setSelected(null);
+        }
+        // Seçili değilse hiçbir şey yapma (clearSelection yok!)
+      }
+    };
+
+    const handleMouseMove = (e) => {
+      if (!isRightDragging.current) return;
+      const latlng = map.mouseEventToLatLng(e);
+      const tid = findTableAtLatLng(latlng);
+
+      // Sağ tuş basılı gezdirirken, altındaki masa seçiliyse unselect
+      if (tid && multiSelected.has(tid)) {
+        setMultiSelected((prev) => {
+          const next = new Set(prev);
+          next.delete(tid);
+          return next;
+        });
       }
     };
 
     const handleMouseUp = (e) => {
+      // Orta tuş bırakılınca pan kapansın
       if (e.button === 1) {
-        container.style.cursor = "default";
+        e.preventDefault();
         map.dragging.disable();
+        container.style.cursor = "default";
+      }
+      // Sağ tuş drag biter
+      if (e.button === 2) {
+        e.preventDefault();
+        isRightDragging.current = false;
       }
     };
 
-    // Event listener'lar
+    // Sağ tık menüsünü kapat
+    const preventCtx = (ev) => ev.preventDefault();
+    container.addEventListener("contextmenu", preventCtx);
     container.addEventListener("mousedown", handleMouseDown);
+    container.addEventListener("mousemove", handleMouseMove);
     container.addEventListener("mouseup", handleMouseUp);
 
-    // Sağ tık menüsünü engelle (harita üstünde)
-    container.addEventListener("contextmenu", (e) => e.preventDefault());
-
     return () => {
+      container.removeEventListener("contextmenu", preventCtx);
       container.removeEventListener("mousedown", handleMouseDown);
+      container.removeEventListener("mousemove", handleMouseMove);
       container.removeEventListener("mouseup", handleMouseUp);
     };
-  }, [map, container, onRightClick]);
+  }, [map, container, poly, multiSelected, setMultiSelected, setSelected]);
 
   return null;
 }
-
 
 /* -------------------- PUNCH LAYER -------------------- */
 function PunchLayer({ punches, polyGeoJSON }) {
@@ -368,11 +422,12 @@ export default function App() {
   };
 
   const deleteAllPunches = () => {
-    if (!safeTableId) return;
-    if (!window.confirm(`${safeTableId} için TÜM punch'lar silinecek. Emin misin?`)) return;
+    const safeId = typeof selected === "string" ? selected : null;
+    if (!safeId) return;
+    if (!window.confirm(`${safeId} için TÜM punch'lar silinecek. Emin misin?`)) return;
     setPunches((prev) => {
       const updated = { ...prev };
-      delete updated[safeTableId];
+      delete updated[safeId];
       return updated;
     });
   };
@@ -455,10 +510,17 @@ export default function App() {
         maxZoom={22}
         style={{ height: "100%", width: "100%" }}
         preferCanvas
-        dragging={false}
+        dragging={false}  // Orta tuşla PanControl açıp kapatacak
       >
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-        <PanControl onRightClick={clearSelection} />
+
+        {/* SADECE MOUSE DAVRANIŞI İÇİN EKLEDİĞİMİZ BİLEŞEN */}
+        <PanControl
+          poly={poly}
+          multiSelected={multiSelected}
+          setMultiSelected={setMultiSelected}
+          setSelected={setSelected}
+        />
 
         <SelectionControl
           poly={poly}
@@ -468,6 +530,7 @@ export default function App() {
           isSelecting={isSelecting}
           setSelected={setSelected}
         />
+
         <GeoJSON
           key={`poly-${punchVersion}`}
           data={poly}
@@ -502,6 +565,7 @@ export default function App() {
             layer.on("mouseout", () => layer.closeTooltip());
           }}
         />
+
         <PunchLayer punches={punches} polyGeoJSON={poly} />
       </MapContainer>
 
