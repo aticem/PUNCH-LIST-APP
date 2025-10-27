@@ -1,6 +1,11 @@
-// src/App.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { MapContainer, TileLayer, GeoJSON, useMap, useMapEvents } from "react-leaflet";
+import {
+  MapContainer,
+  TileLayer,
+  GeoJSON,
+  useMap,
+  useMapEvents,
+} from "react-leaflet";
 import L from "leaflet";
 import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
 import { point } from "@turf/turf";
@@ -220,10 +225,12 @@ function SelectionControl({
         if (duration < 250 && !moved) {
           const latlng = e.latlng;
           const pt = point([latlng.lng, latlng.lat]);
+          let found = null;
           poly.features.forEach((f) => {
             const tid = getTableId(f.properties);
-            if (tid && booleanPointInPolygon(pt, f)) setSelected(tid);
+            if (tid && booleanPointInPolygon(pt, f)) found = tid;
           });
+          if (found) setSelected(found);
         }
       }
     },
@@ -348,32 +355,26 @@ export default function App() {
   return (
     <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
       {/* SEÇİM BİLGİSİ – SOL ÜSTTE SABİT */}
-      <div
-        style={{
-          position: "absolute",
-          top: 16,
-          left: 16,
-          background: "rgba(25,25,30,0.9)",
-          color: "#fff",
-          padding: "10px 16px",
-          borderRadius: 12,
-          fontSize: 15,
-          fontWeight: 600,
-          zIndex: 1500,
-          boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
-          backdropFilter: "blur(8px)",
-          display: "flex",
-          alignItems: "center",
-          gap: 14,
-          minWidth: 260,
-        }}
-      >
-        <span>
-          Seçili: <strong>{multiSelected.size}</strong> masa
-        </span>
-        <span>
-          Toplam Punch: <strong>{totalSelectedPunch}</strong>
-        </span>
+      <div className="selection-info" style={{
+        position: "absolute",
+        top: 16,
+        left: 16,
+        background: "rgba(25,25,30,0.9)",
+        color: "#fff",
+        padding: "10px 16px",
+        borderRadius: 12,
+        fontSize: 15,
+        fontWeight: 600,
+        zIndex: 1500,
+        boxShadow: "0 4px 12px rgba(0,0,0,0.25)",
+        backdropFilter: "blur(8px)",
+        display: "flex",
+        alignItems: "center",
+        gap: 14,
+        minWidth: 260,
+      }}>
+        <span>Seçili: <strong>{multiSelected.size}</strong> masa</span>
+        <span>Toplam Punch: <strong>{totalSelectedPunch}</strong></span>
         {multiSelected.size > 0 && (
           <button
             onClick={clearSelection}
@@ -530,9 +531,7 @@ export default function App() {
               )}
               <div style={{ marginTop: 8 }}>
                 <button className="btn btn-green" onClick={addPunch}>Punch Ekle</button>
-                <button className="btn btn-red" onClick={() => { setNewPunch(null); setNote(""); setPhoto(null); }}>
-                  İptal
-                </button>
+                <button className="btn btn-red" onClick={() => { setNewPunch(null); setNote(""); setPhoto(null); }}>İptal</button>
               </div>
             </div>
           )}
