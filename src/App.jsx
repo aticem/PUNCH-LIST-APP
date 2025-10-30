@@ -11,8 +11,11 @@ import L from "leaflet";
 import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
 import { point } from "@turf/turf";
 
+// --- GeoJSON URL'leri (public/ altında olmalı) ---
 import tablesPolyUrl from "/tables_poly.geojson?url";
 import tablesPointsUrl from "/tables_points.geojson?url";
+import backgroundUrl from "/background.geojson?url";
+import siteBoundaryUrl from "/site_boundary.geojson?url";
 
 /* -------------------- MASA KİMLİĞİ BUL -------------------- */
 function getTableId(props) {
@@ -93,11 +96,9 @@ function isoClickToLatLng(polyFeature, isoX, isoY) {
   return generatePointInsidePolygon(polyFeature);
 }
 
-/* -------------------- PAN KONTROL + SAĞ TIK UNSELECT (SADECE İSTENEN DAVRANIŞ) -------------------- */
-/* - Orta tuş basılı → pan (dragging enable), bırakınca disable
-   - Sağ tuş tek tık: altındaki masa SEÇİLİ ise unselect, değilse hiçbir şey yapma
-   - Sağ tuş basılı sürükle: gezdiği sürece altındaki SEÇİLİ masaları unselect et
-   - Sağ tık pan yapmaz, sadece unselect mantığı çalışır */
+/* -------------------- PAN KONTROL + SAĞ TIK UNSELECT (DAVRANIŞ) -------------------- */
+/* - Orta tuş basılı → pan enable, bırakınca disable
+   - Sağ tuş tek tık / sürükle: seçili masaları unselect et (pan değil) */
 function PanControl({ poly, multiSelected, setMultiSelected, setSelected }) {
   const map = useMap();
   const container = map.getContainer();
@@ -115,19 +116,16 @@ function PanControl({ poly, multiSelected, setMultiSelected, setSelected }) {
   useEffect(() => {
     if (!container) return;
 
-    // Başlangıçta pan kapalı; orta tuş ile açacağız
     map.dragging.disable();
     container.style.cursor = "default";
 
     const handleMouseDown = (e) => {
-      // Orta tuş → pan başlasın
       if (e.button === 1) {
         e.preventDefault();
         container.style.cursor = "grabbing";
         map.dragging.enable();
       }
 
-      // Sağ tuş → sadece unselect davranışı
       if (e.button === 2) {
         e.preventDefault();
         isRightDragging.current = true;
@@ -135,17 +133,14 @@ function PanControl({ poly, multiSelected, setMultiSelected, setSelected }) {
         const latlng = map.mouseEventToLatLng(e);
         const tid = findTableAtLatLng(latlng);
 
-        // SADECE seçiliyse unselect
         if (tid && multiSelected.has(tid)) {
           setMultiSelected((prev) => {
             const next = new Set(prev);
             next.delete(tid);
             return next;
           });
-          // Eğer sadece bir tane seçili masa kalmışsa ve onu da kaldırdıysa, detay panelini kapat
           if (multiSelected.size === 1) setSelected(null);
         }
-        // Seçili değilse hiçbir şey yapma (clearSelection yok!)
       }
     };
 
@@ -154,7 +149,6 @@ function PanControl({ poly, multiSelected, setMultiSelected, setSelected }) {
       const latlng = map.mouseEventToLatLng(e);
       const tid = findTableAtLatLng(latlng);
 
-      // Sağ tuş basılı gezdirirken, altındaki masa seçiliyse unselect
       if (tid && multiSelected.has(tid)) {
         setMultiSelected((prev) => {
           const next = new Set(prev);
@@ -165,20 +159,17 @@ function PanControl({ poly, multiSelected, setMultiSelected, setSelected }) {
     };
 
     const handleMouseUp = (e) => {
-      // Orta tuş bırakılınca pan kapansın
       if (e.button === 1) {
         e.preventDefault();
         map.dragging.disable();
         container.style.cursor = "default";
       }
-      // Sağ tuş drag biter
       if (e.button === 2) {
         e.preventDefault();
         isRightDragging.current = false;
       }
     };
 
-    // Sağ tık menüsünü kapat
     const preventCtx = (ev) => ev.preventDefault();
     container.addEventListener("contextmenu", preventCtx);
     container.addEventListener("mousedown", handleMouseDown);
@@ -197,6 +188,8 @@ function PanControl({ poly, multiSelected, setMultiSelected, setSelected }) {
 }
 
 /* -------------------- PUNCH LAYER -------------------- */
+/* - Masa içi punch'lar: polygon bulunursa içine random yerleştirme cache'i
+   - Serbest (masa dışı) punch'lar: latlng zaten var, direkt çizer */
 function PunchLayer({ punches, polyGeoJSON }) {
   const map = useMap();
   const layerRef = useRef(null);
@@ -220,13 +213,30 @@ function PunchLayer({ punches, polyGeoJSON }) {
 
   useEffect(() => {
     const layer = layerRef.current;
-    if (!layer || !polyGeoJSON) return;
+    if (!layer) return;
     layer.clearLayers();
 
     Object.keys(punches).forEach((tid) => {
+      const list = punches[tid] || [];
+
+      // Masa dışı (serbest) punch grubu: "__free__"
+      if (tid === "__free__") {
+        list.forEach((p) => {
+          if (!p.latlng) return;
+          L.circleMarker(p.latlng, {
+            radius: 3,
+            color: "#fff",
+            weight: 1.2,
+            fillColor: "#f00",
+            fillOpacity: 1,
+          }).addTo(layer);
+        });
+        return;
+      }
+
+      // Masa içi punch grubu
       const polygon = polyIndexRef.current[tid];
       if (!polygon) return;
-      const list = punches[tid] || [];
       list.forEach((p) => {
         if (!p.latlng) {
           if (!punchLocationsRef.current[p.id]) {
@@ -243,12 +253,14 @@ function PunchLayer({ punches, polyGeoJSON }) {
         }).addTo(layer);
       });
     });
-  }, [punches, polyGeoJSON, map]);
+  }, [punches, map]);
 
   return null;
 }
 
 /* -------------------- SEÇİM KONTROL -------------------- */
+/* - Sol tık basılı sürükle: çoklu seçime ekler
+   - Kısa tek tık: masa üstünde ise setSelected */
 function SelectionControl({
   poly,
   multiSelected,
@@ -325,15 +337,66 @@ function SelectionControl({
   return null;
 }
 
+/* -------------------- BOUNDARY İÇİNDE MASA DIŞI TIK = FORM -------------------- */
+/* - Sol tık:
+     * Eğer masa üstünde değilse ve boundary içindeyse → serbest punch formu aç
+     * Masa üstünde ise hiçbir şey yapma (SelectionControl + GeoJSON tooltip/selection zaten çalışır)
+*/
+function BoundaryFreePunchClick({
+  poly,
+  boundary,
+  isSelecting,
+  setSelected,
+  setSelectedPunch,
+  setNewPunch,
+}) {
+  useMapEvents({
+    click: (e) => {
+      if (isSelecting) return; // seçim sırasında devreye girme
+      const latlng = e.latlng;
+      const pt = point([latlng.lng, latlng.lat]);
+
+      // Masa üstünde mi?
+      let onTable = false;
+      poly.features.forEach((f) => {
+        const tid = getTableId(f.properties);
+        if (tid && booleanPointInPolygon(pt, f)) onTable = true;
+      });
+      if (onTable) return; // masa üstünde ise burası değil, SelectionControl işini yapacak
+
+      // Boundary içinde mi?
+      let insideBoundary = false;
+      const feats = boundary?.features || [];
+      for (const f of feats) {
+        if (booleanPointInPolygon(pt, f)) {
+          insideBoundary = true;
+          break;
+        }
+      }
+      if (!insideBoundary) return;
+
+      // Serbest punch formunu aç (panel değil, modal form)
+      setSelected(null);           // masa panelini kapat
+      setSelectedPunch(null);      // olası popup kapansın
+      setNewPunch({ table_id: "__free__", latlng: [latlng.lat, latlng.lng] });
+    },
+  });
+  return null;
+}
+
 /* -------------------- ANA COMPONENT -------------------- */
 export default function App() {
   const [poly, setPoly] = useState(null);
   const [points, setPoints] = useState(null);
+  const [background, setBackground] = useState(null);
+  const [boundary, setBoundary] = useState(null);
+
   const [punches, setPunches] = useState({});
   const [selected, setSelected] = useState(null);
   const [newPunch, setNewPunch] = useState(null);
   const [note, setNote] = useState("");
   const [photo, setPhoto] = useState(null);
+
   const [multiSelected, setMultiSelected] = useState(new Set());
   const [isSelecting, setIsSelecting] = useState(false);
 
@@ -341,26 +404,46 @@ export default function App() {
   const [isoLoaded, setIsoLoaded] = useState(false);
   const [isoError, setIsoError] = useState(false);
 
-  // 🆕 Eklenen state: izometrikteki kırmızı noktaya tıklayınca detay gösterimi
+  // İzometrikteki kırmızı noktaya tıklayınca detayı gösteren popup
   const [selectedPunch, setSelectedPunch] = useState(null);
 
-  useEffect(() => {
-    Promise.all([
-      fetch(tablesPolyUrl).then((r) => r.json()),
-      fetch(tablesPointsUrl).then((r) => r.json()),
-    ])
-      .then(([polyData, pointsData]) => {
-        setPoly(polyData);
-        setPoints(pointsData);
-      })
-      .catch((err) => console.error("GeoJSON error", err));
-  }, []);
+  // GeoJSON'ları yükle
+// GeoJSON'ları yükle (boş olsa bile hata vermez)
+useEffect(() => {
+  const loadSafe = async (url, name) => {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`${name} not found`);
+      const data = await r.json();
+      if (!data || !data.features) throw new Error(`${name} invalid`);
+      return data;
+    } catch (err) {
+      console.warn(`⚠️ ${name} yüklenemedi:`, err.message);
+      // boş GeoJSON döndür
+      return { type: "FeatureCollection", features: [] };
+    }
+  };
 
+  (async () => {
+    const [polyData, pointsData, bgData, boundaryData] = await Promise.all([
+      loadSafe(tablesPolyUrl, "tables_poly.geojson"),
+      loadSafe(tablesPointsUrl, "tables_points.geojson"),
+      loadSafe(backgroundUrl, "background.geojson"),
+      loadSafe(siteBoundaryUrl, "site_boundary.geojson"),
+    ]);
+    setPoly(polyData);
+    setPoints(pointsData);
+    setBackground(bgData);
+    setBoundary(boundaryData);
+  })();
+}, []);
+
+
+  // localStorage load/save
   useEffect(() => {
     const s = localStorage.getItem("punches");
     if (s) setPunches(JSON.parse(s));
   }, []);
-
   useEffect(() => {
     localStorage.setItem("punches", JSON.stringify(punches));
   }, [punches]);
@@ -377,9 +460,10 @@ export default function App() {
     [multiSelected, punches]
   );
 
+  // İzometrikte resim tıklaması → masa içi yeni punch
   const onIsoClick = (e) => {
     if (!isoRef.current || !isoLoaded || isoError || !safeTableId) return;
-    // Eğer punch popup açıkken arka görsel tıklanırsa kapat (daha doğal UX)
+    // açık popup varsa önce kapat
     if (selectedPunch) {
       setSelectedPunch(null);
       return;
@@ -393,6 +477,7 @@ export default function App() {
     setNewPunch({ table_id: safeTableId, isoX, isoY, latlng });
   };
 
+  // Foto yükleme
   const onPhoto = (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -401,26 +486,29 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
+  // Punch ekleme
   const addPunch = () => {
-    if (!newPunch || !newPunch.table_id || !newPunch.latlng) return;
+    if (!newPunch || !newPunch.latlng) return;
+    const key = newPunch.table_id || "__free__"; // masa yoksa serbest
     const id = Date.now();
     const record = {
       id,
-      isoX: newPunch.isoX,
-      isoY: newPunch.isoY,
+      isoX: newPunch.isoX ?? null,
+      isoY: newPunch.isoY ?? null,
       note,
       photo,
       latlng: newPunch.latlng,
     };
     setPunches((prev) => ({
       ...prev,
-      [newPunch.table_id]: [...(prev[newPunch.table_id] || []), record],
+      [key]: [...(prev[key] || []), record],
     }));
     setNewPunch(null);
     setNote("");
     setPhoto(null);
   };
 
+  // Seçili masanın tüm punch'larını sil
   const deleteAllPunches = () => {
     const safeId = typeof selected === "string" ? selected : null;
     if (!safeId) return;
@@ -434,7 +522,8 @@ export default function App() {
 
   const clearSelection = () => setMultiSelected(new Set());
 
-  if (!points || !poly) {
+  // Yüklenme state
+  if (!points || !poly || !background || !boundary) {
     return (
       <div
         style={{
@@ -455,7 +544,7 @@ export default function App() {
 
   return (
     <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
-      {/* SEÇİM BİLGİSİ – SOL ÜSTTE SABİT */}
+      {/* SEÇİM BİLGİSİ – SOL ÜSTTE */}
       <div
         style={{
           position: "absolute",
@@ -510,11 +599,33 @@ export default function App() {
         maxZoom={22}
         style={{ height: "100%", width: "100%" }}
         preferCanvas
-        dragging={false}  // Orta tuşla PanControl açıp kapatacak
+        dragging={false} // Orta tuş ile PanControl aç/kapa
       >
         <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
 
-        {/* SADECE MOUSE DAVRANIŞI İÇİN EKLEDİĞİMİZ BİLEŞEN */}
+        {/* Arka plan (background) en alta, soft renklerle */}
+        <GeoJSON
+          data={background}
+          style={() => ({
+            color: "#888",
+            weight: 1,
+            opacity: 0.6,
+            fillColor: "#bbb",
+            fillOpacity: 0.2,
+          })}
+        />
+
+        {/* Boundary (site sınırı) – hat olarak belirgin */}
+        <GeoJSON
+          data={boundary}
+          style={() => ({
+            color: "#2ecc71",
+            weight: 2,
+            opacity: 0.9,
+            fillOpacity: 0, // sadece hat
+          })}
+        />
+
         <PanControl
           poly={poly}
           multiSelected={multiSelected}
@@ -531,6 +642,17 @@ export default function App() {
           setSelected={setSelected}
         />
 
+        {/* Masa DIŞI tık (boundary içinde) → serbest punch formu */}
+        <BoundaryFreePunchClick
+          poly={poly}
+          boundary={boundary}
+          isSelecting={isSelecting}
+          setSelected={setSelected}
+          setSelectedPunch={setSelectedPunch}
+          setNewPunch={setNewPunch}
+        />
+
+        {/* Masalar */}
         <GeoJSON
           key={`poly-${punchVersion}`}
           data={poly}
@@ -566,10 +688,11 @@ export default function App() {
           }}
         />
 
+        {/* Tüm punch'ların (masa içi + serbest) harita overlay'i */}
         <PunchLayer punches={punches} polyGeoJSON={poly} />
       </MapContainer>
 
-      {/* PANEL */}
+      {/* PANEL – SADECE MASA SEÇİLİYKEN */}
       {safeTableId && (
         <div className="panel">
           <h3>{safeTableId}</h3>
@@ -622,10 +745,10 @@ export default function App() {
               />
             ))}
 
-            {/* 🆕 Punch Detay Popup (not + foto) */}
+            {/* Punch Detay Popup */}
             {selectedPunch && (
               <div
-                onClick={(e) => e.stopPropagation()} // içe tıklayınca kapanmasın
+                onClick={(e) => e.stopPropagation()}
                 style={{
                   position: "absolute",
                   left: `${selectedPunch.isoX}%`,
@@ -719,7 +842,8 @@ export default function App() {
             </button>
           )}
 
-          {newPunch && (
+          {/* Masa içi punch formu – izometrik tıklayınca açılıyor */}
+          {newPunch && newPunch.table_id === safeTableId && (
             <div style={{ width: "100%", textAlign: "center", marginTop: 12 }}>
               <input
                 type="text"
@@ -782,6 +906,123 @@ export default function App() {
           >
             Kapat
           </button>
+        </div>
+      )}
+
+      {/* SERBEST (MASA DIŞI) PUNCH FORMU – MODAL (boundary içinde, masa dışında tıkla) */}
+      {newPunch && newPunch.table_id === "__free__" && (
+        <div
+          onClick={() => {
+            // modal dışına tık iptal
+            setNewPunch(null);
+            setNote("");
+            setPhoto(null);
+          }}
+          style={{
+            position: "absolute",
+            inset: 0,
+            background: "rgba(0,0,0,0.45)",
+            zIndex: 1600,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 380,
+              maxWidth: "92vw",
+              background: "#111",
+              border: "1px solid #333",
+              borderRadius: 12,
+              padding: 16,
+              color: "#fff",
+              boxShadow: "0 12px 30px rgba(0,0,0,0.45)",
+            }}
+          >
+            <div
+              style={{
+                fontWeight: 700,
+                marginBottom: 10,
+                fontSize: 16,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <span>Yeni Punch (Masa Dışı)</span>
+              <button
+                onClick={() => {
+                  setNewPunch(null);
+                  setNote("");
+                  setPhoto(null);
+                }}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#fff",
+                  fontSize: 18,
+                  cursor: "pointer",
+                  lineHeight: 1,
+                }}
+                aria-label="Kapat"
+              >
+                ×
+              </button>
+            </div>
+
+            <input
+              type="text"
+              placeholder="Not (opsiyonel)"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              style={{
+                width: "100%",
+                margin: "6px 0",
+                padding: 8,
+                borderRadius: 6,
+                border: "1px solid #444",
+                background: "#222",
+                color: "#fff",
+              }}
+            />
+            <input
+              type="file"
+              accept="image/*"
+              onChange={onPhoto}
+              style={{ display: "block", margin: "6px 0" }}
+            />
+            {photo && (
+              <img
+                src={photo}
+                alt="preview"
+                style={{
+                  width: "100%",
+                  margin: "8px 0",
+                  borderRadius: 8,
+                  display: "block",
+                }}
+              />
+            )}
+
+            <div style={{ marginTop: 10, display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button
+                className="btn btn-gray"
+                onClick={() => {
+                  setNewPunch(null);
+                  setNote("");
+                  setPhoto(null);
+                }}
+              >
+                İptal
+              </button>
+              <button className="btn btn-green" onClick={addPunch}>
+                Punch Ekle
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
