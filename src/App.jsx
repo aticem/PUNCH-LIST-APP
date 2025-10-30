@@ -190,73 +190,84 @@ function PanControl({ poly, multiSelected, setMultiSelected, setSelected }) {
 /* -------------------- PUNCH LAYER -------------------- */
 /* - Masa içi punch'lar: polygon bulunursa içine random yerleştirme cache'i
    - Serbest (masa dışı) punch'lar: latlng zaten var, direkt çizer */
-function PunchLayer({ punches, polyGeoJSON }) {
-  const map = useMap();
-  const layerRef = useRef(null);
-  const polyIndexRef = useRef({});
-  const punchLocationsRef = useRef({});
-
-  useEffect(() => {
-    if (!polyGeoJSON) return;
-    const index = {};
-    polyGeoJSON.features.forEach((f) => {
-      const tid = getTableId(f.properties);
-      if (tid) index[tid] = f;
+   function PunchLayer({ punches, polyGeoJSON, setSelectedPunch }) {
+    const map = useMap();
+    const layerRef = useRef(null);
+    const polyIndexRef = useRef({});
+    const punchLocationsRef = useRef({});
+  
+    useEffect(() => {
+      if (!polyGeoJSON) return;
+      const index = {};
+      polyGeoJSON.features.forEach((f) => {
+        const tid = getTableId(f.properties);
+        if (tid) index[tid] = f;
+      });
+      polyIndexRef.current = index;
+    }, [polyGeoJSON]);
+  
+    useEffect(() => {
+      if (!layerRef.current) layerRef.current = L.layerGroup().addTo(map);
+      return () => layerRef.current && layerRef.current.remove();
+    }, [map]);
+  
+    useEffect(() => {
+      const layer = layerRef.current;
+      if (!layer) return;
+      layer.clearLayers();
+  
+      Object.keys(punches).forEach((tid) => {
+        const list = punches[tid] || [];
+  
+        // __free__ punchlar (bağımsız noktalar)
+if (tid === "__free__") {
+  list.forEach((p) => {
+    if (!p.latlng) return;
+    const marker = L.circleMarker(p.latlng, {
+      radius: 3,
+      color: "#fff",
+      weight: 1.2,
+      fillColor: "#f00",
+      fillOpacity: 1,
+    }).addTo(layer);
+    marker.on("click", () => {
+      // __free__ punchlarda da formu aktif et
+      setSelectedPunch({ ...p, table_id: "__free__" });
     });
-    polyIndexRef.current = index;
-  }, [polyGeoJSON]);
+  });
+  return;
+}
 
-  useEffect(() => {
-    if (!layerRef.current) layerRef.current = L.layerGroup().addTo(map);
-    return () => layerRef.current && layerRef.current.remove();
-  }, [map]);
-
-  useEffect(() => {
-    const layer = layerRef.current;
-    if (!layer) return;
-    layer.clearLayers();
-
-    Object.keys(punches).forEach((tid) => {
-      const list = punches[tid] || [];
-
-      // Masa dışı (serbest) punch grubu: "__free__"
-      if (tid === "__free__") {
+  
+        const polygon = polyIndexRef.current[tid];
+        if (!polygon) return;
+  
         list.forEach((p) => {
-          if (!p.latlng) return;
-          L.circleMarker(p.latlng, {
-            radius: 3,
+          if (!p.latlng) {
+            if (!punchLocationsRef.current[p.id]) {
+              punchLocationsRef.current[p.id] = generatePointInsidePolygon(polygon);
+            }
+            p.latlng = punchLocationsRef.current[p.id];
+          }
+  
+          const marker = L.circleMarker(p.latlng, {
+            radius: 2.5,
             color: "#fff",
             weight: 1.2,
             fillColor: "#f00",
             fillOpacity: 1,
           }).addTo(layer);
+  
+          // ✅ Punch’a tıklayınca formu aç
+          marker.on("click", () => setSelectedPunch(p));
         });
-        return;
-      }
-
-      // Masa içi punch grubu
-      const polygon = polyIndexRef.current[tid];
-      if (!polygon) return;
-      list.forEach((p) => {
-        if (!p.latlng) {
-          if (!punchLocationsRef.current[p.id]) {
-            punchLocationsRef.current[p.id] = generatePointInsidePolygon(polygon);
-          }
-          p.latlng = punchLocationsRef.current[p.id];
-        }
-        L.circleMarker(p.latlng, {
-          radius: 2.5,
-          color: "#fff",
-          weight: 1.2,
-          fillColor: "#f00",
-          fillOpacity: 1,
-        }).addTo(layer);
       });
-    });
-  }, [punches, map]);
-
-  return null;
-}
+    }, [punches, map, setSelectedPunch]);
+  
+    return null;
+  }
+  
+  
 
 /* -------------------- SEÇİM KONTROL -------------------- */
 /* - Sol tık basılı sürükle: çoklu seçime ekler
@@ -689,7 +700,8 @@ useEffect(() => {
         />
 
         {/* Tüm punch'ların (masa içi + serbest) harita overlay'i */}
-        <PunchLayer punches={punches} polyGeoJSON={poly} />
+        <PunchLayer punches={punches} polyGeoJSON={poly} setSelectedPunch={setSelectedPunch} />
+
       </MapContainer>
 
       {/* PANEL – SADECE MASA SEÇİLİYKEN */}
