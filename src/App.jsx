@@ -14,7 +14,6 @@ import { point } from "@turf/turf";
 // Lütfen bu yolların projenizde doğru olduğundan emin olun!
 import tablesPolyUrl from "/tables_poly.geojson?url";
 import tablesPointsUrl from "/tables_points.geojson?url";
-import backgroundUrl from "/background.geojson?url";
 import siteBoundaryUrl from "/site_boundary.geojson?url";
 
 /* -------------------- YARDIMCI FONKSİYONLAR -------------------- */
@@ -418,7 +417,6 @@ window.editFreePunch = (id) => {
 export default function App() {
     const [poly, setPoly] = useState(null);
     const [points, setPoints] = useState(null);
-    const [background, setBackground] = useState(null);
     const [boundary, setBoundary] = useState(null);
 
     const [punches, setPunches] = useState({});
@@ -473,17 +471,16 @@ export default function App() {
         };
 
         (async () => {
-            const [polyData, pointsData, bgData, boundaryData] = await Promise.all([
-                loadSafe(tablesPolyUrl, "tables_poly.geojson"),
-                loadSafe(tablesPointsUrl, "tables_points.geojson"),
-                loadSafe(backgroundUrl, "background.geojson"),
-                loadSafe(siteBoundaryUrl, "site_boundary.geojson"),
+            const [polyData, pointsData, boundaryData] = await Promise.all([
+              loadSafe(tablesPolyUrl, "tables_poly.geojson"),
+              loadSafe(tablesPointsUrl, "tables_points.geojson"),
+              loadSafe(siteBoundaryUrl, "site_boundary.geojson"),
             ]);
             setPoly(polyData);
             setPoints(pointsData);
-            setBackground(bgData);
             setBoundary(boundaryData);
-        })();
+          })();
+          
     }, []);
 
     // localStorage
@@ -582,7 +579,8 @@ export default function App() {
         setEditPhoto(null);
     };
 
-    if (!points || !poly || !background || !boundary) {
+    if (!points || !poly || !boundary) {
+
         return (
             <div style={{ background: "#111", color: "#fff", padding: 12, textAlign: "center", height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
                 <b>Loading GeoJSON...</b>
@@ -613,7 +611,6 @@ export default function App() {
                 doubleClickZoom={true}
             >
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                <GeoJSON data={background} style={() => ({ color: "#888", weight: 1, opacity: 0.6, fillColor: "#bbb", fillOpacity: 0.2 })} />
                 <GeoJSON data={boundary} style={() => ({ color: "#2ecc71", weight: 2, opacity: 0.9, fillOpacity: 0 })} />
 
                 <RightClickUnselect poly={poly} multiSelected={multiSelected} setMultiSelected={setMultiSelected} setSelected={setSelected} />
