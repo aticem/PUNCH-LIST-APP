@@ -71,3 +71,11 @@ html, body, #root { height: 100%; margin: 0; padding: 0; }
   transition: background 0.2s ease;
 }
 .selection-counter button:hover { background: #d32f2f; }
+
+.selection-box {
+  position: absolute;
+  border: 2px dashed #4caf50;
+  background: rgba(76, 175, 80, 0.2);
+  pointer-events: none;
+  z-index: 2000;
+}
