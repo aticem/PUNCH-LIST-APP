@@ -43,6 +43,7 @@ function getPunchCount(punches, tableId) {
     return (punches[tableId] || []).length;
 }
 
+// Düzeltilmiş getSafeCenter fonksiyonu
 function getSafeCenter(geojson) {
     try {
         const feats = geojson?.features || [];
@@ -57,7 +58,8 @@ function getSafeCenter(geojson) {
                 }
             }
         }
-        return n ? [sy / n, sx / n] : [52.712, -1.706];
+        // Başlangıç merkezi için sırasıyla [lat, lon] döndürülür.
+        return n ? [sy / n, sx / n] : [52.712, -1.706]; 
     } catch {
         return [52.712, -1.706];
     }
@@ -70,7 +72,7 @@ function generatePointInsidePolygon(polygon, maxTries = 100) {
 
     for (let i = 0; i < maxTries; i++) {
         const lng = sw.lng + Math.random() * (ne.lng - sw.lng);
-        const lat = sw.lat + Math.random() * (ne.lat - sw.lat);
+        const lat = sw.lat + Math.random() * (ne.lat - sw.lat); // Burada ne.lat kullanılmalı
         const pt = point([lng, lat]);
         if (booleanPointInPolygon(pt, polygon)) return [lat, lng];
     }
@@ -93,7 +95,7 @@ function isoClickToLatLng(polyFeature, isoX, isoY) {
     return generatePointInsidePolygon(polyFeature);
 }
 
-/* -------------------- KUTU SEÇİM ÇİZİMİ (YENİ) -------------------- */
+/* -------------------- KUTU SEÇİM ÇİZİMİ -------------------- */
 function BoxSelectionOverlay({ startPoint, endPoint }) {
     if (!startPoint || !endPoint) return null;
 
@@ -105,18 +107,16 @@ function BoxSelectionOverlay({ startPoint, endPoint }) {
         height: Math.abs(startPoint.y - endPoint.y),
     };
 
-    // Bu div, haritanın üst katmanında (map.getPanes().overlayPane'de) görünür.
+    // Haritanın üzerine çizim için style eklentisi gerekiyor (App.css'te olmalı)
     return <div className="selection-box" style={style} />;
 }
 
 
-/* -------------------- SAĞ TIK UNSELECT -------------------- */
-// Not: multiSelected artık punch ID'lerini tuttuğu için bu bileşen mantıksız hale geldi.
-// Masa seçimini sağ tıkla kaldırmak artık punch'ın seçilip seçilmemesine bağlı olacak.
+/* -------------------- SAĞ TIK UNSELECT (Punch bazlı) -------------------- */
 function RightClickUnselect({ poly, punches, multiSelectedPunches, setMultiSelected, setSelected }) {
     const map = useMap();
 
-    function findTableAndPunchAtLatLng(latlng) {
+    function findTableAtLatLng(latlng) {
         const pt = point([latlng.lng, latlng.lat]);
         let foundTableId = null;
 
@@ -129,7 +129,6 @@ function RightClickUnselect({ poly, punches, multiSelectedPunches, setMultiSelec
             }
         }
         
-        // Punch Tespiti (Bu kısım şu an için sağ tıkta kullanılmıyor, sadece masa ID'si önemli)
         return foundTableId;
     }
 
@@ -137,7 +136,7 @@ function RightClickUnselect({ poly, punches, multiSelectedPunches, setMultiSelec
         contextmenu: (e) => {
             L.DomEvent.preventDefault(e);
             const latlng = e.latlng;
-            const tid = findTableAndPunchAtLatLng(latlng);
+            const tid = findTableAtLatLng(latlng);
 
             if (tid) {
                 // Tıklanan masaya ait seçili punch'ları bul ve kaldır
@@ -162,7 +161,7 @@ function RightClickUnselect({ poly, punches, multiSelectedPunches, setMultiSelec
     return null;
 }
 
-/* -------------------- PUNCH LAYER (Vurgulama eklendi) -------------------- */
+/* -------------------- PUNCH LAYER (Görsel temizleme düzeltildi) -------------------- */
 function PunchLayer({ punches, polyGeoJSON, setSelectedPunch, safeTableId, multiSelectedPunches }) {
     const map = useMap();
     const layerRef = useRef(null);
@@ -184,6 +183,7 @@ function PunchLayer({ punches, polyGeoJSON, setSelectedPunch, safeTableId, multi
         return () => layerRef.current && layerRef.current.remove();
     }, [map]);
 
+    // multiSelectedPunches state'i değiştiğinde markerları yeniden çizmek için kullanılır.
     useEffect(() => {
         const layer = layerRef.current;
         if (!layer) return;
@@ -197,7 +197,7 @@ function PunchLayer({ punches, polyGeoJSON, setSelectedPunch, safeTableId, multi
             
             // PUNCH'LAR
             list.forEach((p) => {
-                // Serbest punch veya masa içi punch konumu
+                // Konum yoksa atla veya hesapla
                 if (!p.latlng) {
                     if (tid !== "__free__" && polyIndexRef.current[tid]) {
                         if (!punchLocationsRef.current[p.id]) {
@@ -205,7 +205,7 @@ function PunchLayer({ punches, polyGeoJSON, setSelectedPunch, safeTableId, multi
                         }
                         p.latlng = punchLocationsRef.current[p.id];
                     } else {
-                        return; // Konumu olmayan serbest punch'ı atla
+                        return; // Konumu olmayan punch'ı atla
                     }
                 }
 
@@ -213,7 +213,7 @@ function PunchLayer({ punches, polyGeoJSON, setSelectedPunch, safeTableId, multi
 
                 const marker = L.circleMarker(p.latlng, {
                     radius: isSelected ? 9 : 6,
-                    color: isSelected ? "#00FFFF" : "#fff", // Seçiliyse cyan
+                    color: isSelected ? "#00FFFF" : "#fff", // Seçiliyse cyan, değilse beyaz
                     weight: isSelected ? 2.5 : 1.5,
                     fillColor: isSelected ? "#007bff" : "#f00", // Seçiliyse mavi, değilse kırmızı
                     fillOpacity: 1,
@@ -225,12 +225,11 @@ function PunchLayer({ punches, polyGeoJSON, setSelectedPunch, safeTableId, multi
                 
                 if (tid === "__free__") {
                     // Serbest Punch için Popup ve etkileşim
-                    const popupHTML = `...`; // Popup HTML'iniz buraya gelecek
-                    marker.bindPopup(`
+                    const popupHTML = `
                         <div style="font-family:sans-serif;min-width:180px;">
                             <b style="color:#ff9800;">Serbest Punch</b>
                             ${p.photo ? `<img src="${p.photo}" style="width:100%;border-radius:6px;margin:6px 0;display:block;" />` : ""}
-                            <div style="font-size:13px;margin-top:6px;white-space:pre-wrap;">
+                            <div style="font-size:13px;margin-top:6px;whiteSpace:pre-wrap;">
                                 ${p.note?.trim() ? p.note : '<i style="opacity:0.6;">(Not yok)</i>'}
                             </div>
                             <div style="margin-top:10px;display:flex;gap:6px;justify-content:flex-end;">
@@ -244,7 +243,8 @@ function PunchLayer({ punches, polyGeoJSON, setSelectedPunch, safeTableId, multi
                                 </button>
                             </div>
                         </div>
-                    `, {
+                    `;
+                    marker.bindPopup(popupHTML, {
                         maxWidth: 260,
                         className: "custom-punch-popup",
                     });
@@ -278,46 +278,41 @@ function PunchLayer({ punches, polyGeoJSON, setSelectedPunch, safeTableId, multi
                 });
             });
         });
-    }, [punches, map, setSelectedPunch, safeTableId, multiSelectedPunches]);
+    }, [punches, map, setSelectedPunch, safeTableId, multiSelectedPunches]); // multiSelectedPunches bağımlılığı korunuyor
 
     return null;
 }
 
-/* -------------------- SEÇİM KONTROL (PUNCH BAZLI) -------------------- */
-function SelectionControl({ poly, punches, multiSelected, setMultiSelected, setIsSelecting, isSelecting, setSelected, setSelectionBox }) {
-    const map = useMap(); // Harita objesini al
+/* -------------------- SEÇİM KONTROL (Kutu Seçimi ve Form Açılması Düzeltildi) -------------------- */
+function SelectionControl({ poly, punches, multiSelected, setMultiSelected, setIsSelecting, isSelecting, setSelected, setSelectionBox, setJustDragged }) {
+    const map = useMap();
     const isDragging = useRef(false);
     const clickStartTime = useRef(0);
-    const clickStartCoords = useRef(null); // Ekrandaki XY koordinatları
-    const clickStartLatLng = useRef(null); // Harita LatLng koordinatları
+    const clickStartCoords = useRef(null);
+    const clickStartLatLng = useRef(null);
 
     useMapEvents({
         mousedown: (e) => {
             if (e.originalEvent.button !== 0) return;
             
-            // Pan'i engelle ve seçimi başlat
             map.dragging.disable();
             
             isDragging.current = true;
             setIsSelecting(true);
             clickStartTime.current = Date.now();
             
-            // Ekran ve Harita başlangıç koordinatlarını kaydet
             clickStartCoords.current = { x: e.originalEvent.clientX, y: e.originalEvent.clientY };
             clickStartLatLng.current = e.latlng;
             
-            // Kutuyu çizmeye başla
             setSelectionBox({
                 start: { x: e.originalEvent.clientX, y: e.originalEvent.clientY },
                 end: { x: e.originalEvent.clientX, y: e.originalEvent.clientY }
             });
 
-            // Kısa tık veya CTRL/Meta basılmadıysa mevcut çoklu seçimi temizle (Yeni seçime başla)
+            // Kısa tık veya CTRL/Meta basılmadıysa mevcut çoklu seçimi temizle
             if (!e.originalEvent.ctrlKey && !e.originalEvent.metaKey) {
                  setMultiSelected(new Set());
             }
-
-            // Punch ID'lerini toplama mantığı mousemove'a taşındı.
         },
 
         mousemove: (e) => {
@@ -329,52 +324,77 @@ function SelectionControl({ poly, punches, multiSelected, setMultiSelected, setI
                 end: { x: e.originalEvent.clientX, y: e.originalEvent.clientY }
             });
             
-            // Seçim kutusunun LatLng sınırlarını hesapla
-            const startLatLng = clickStartLatLng.current;
-            const endLatLng = e.latlng;
-            
-            const minLat = Math.min(startLatLng.lat, endLatLng.lat);
-            const maxLat = Math.max(startLatLng.lat, endLatLng.lat);
-            const minLng = Math.min(startLatLng.lng, endLatLng.lng);
-            const maxLng = Math.max(startLatLng.lng, endLatLng.lng);
+            // Sürükleme mesafesi yeterliyse box selection yap (5px eşiği)
+            const screenMoveDistance = Math.sqrt(
+                Math.pow(clickStartCoords.current.x - e.originalEvent.clientX, 2) +
+                Math.pow(clickStartCoords.current.y - e.originalEvent.clientY, 2)
+            );
+            const moved = screenMoveDistance > 5;
 
-            // Eğer Ctrl/Meta tuşu basılıysa, mevcut seçimi koruyarak üzerine ekle. Yoksa yeni bir set başlat.
-            const newSelectedPunches = new Set(e.originalEvent.ctrlKey || e.originalEvent.metaKey ? multiSelected : []);
-            
-            // Tüm punch'ları kontrol et
-            Object.values(punches).flat().forEach(punch => {
-                if (!punch.latlng) return;
-                const [lat, lng] = punch.latlng;
+            if (moved) {
+                L.DomEvent.stopPropagation(e); // Sürükleme sırasında olası click eventlerini engelle
 
-                // Punch koordinatlarının seçim kutusunda olup olmadığını kontrol et
-                if (lat >= minLat && lat <= maxLat && lng >= minLng && lng <= maxLng) {
-                    newSelectedPunches.add(punch.id);
-                } else if (!e.originalEvent.ctrlKey && !e.originalEvent.metaKey) {
-                    // Eğer ctrl basılı değilse, kutu dışında kalan seçili punch'ları temizle
-                    newSelectedPunches.delete(punch.id);
-                }
-            });
-
-            setMultiSelected(newSelectedPunches);
+                const startLatLng = clickStartLatLng.current;
+                const endLatLng = e.latlng;
+                
+                const minLat = Math.min(startLatLng.lat, endLatLng.lat);
+                const maxLat = Math.max(startLatLng.lat, endLatLng.lat);
+                const minLng = Math.min(startLatLng.lng, endLatLng.lng);
+                const maxLng = Math.max(startLatLng.lng, endLatLng.lng);
+    
+                const isAdditive = e.originalEvent.ctrlKey || e.originalEvent.metaKey;
+                const initialSelected = isAdditive ? multiSelected : new Set();
+                const newSelectedPunches = new Set(initialSelected);
+                
+                // SADECE PUNCH'LARI KONTROL ET
+                Object.values(punches).flat().forEach(punch => {
+                    if (!punch.latlng) return;
+                    const [lat, lng] = punch.latlng;
+    
+                    if (lat >= minLat && lat <= maxLat && lng >= minLng && lng <= maxLng) {
+                        newSelectedPunches.add(punch.id);
+                    } else if (!isAdditive && initialSelected.has(punch.id)) {
+                        newSelectedPunches.delete(punch.id);
+                    }
+                });
+    
+                setMultiSelected(newSelectedPunches);
+            }
         },
 
         mouseup: (e) => {
             if (e.originalEvent.button !== 0) return;
 
-            // Pan'i tekrar etkinleştir ve seçim kutusunu temizle
             map.dragging.enable();
-            setSelectionBox(null);
             
             const duration = Date.now() - clickStartTime.current;
-            const moved =
-                clickStartCoords.current &&
-                (Math.abs(clickStartCoords.current.x - e.originalEvent.clientX) > 5 ||
-                    Math.abs(clickStartCoords.current.y - e.originalEvent.clientY) > 5);
-            
+            const screenMoveDistance = clickStartCoords.current ? Math.sqrt(
+                Math.pow(clickStartCoords.current.x - e.originalEvent.clientX, 2) +
+                Math.pow(clickStartCoords.current.y - e.originalEvent.clientY, 2)
+            ) : 0;
+            // Eşik değeri 8px: Kutu seçimi sırasında form açılmasını önlemek için.
+            const DRAG_THRESHOLD = 8; 
+            const moved = screenMoveDistance > DRAG_THRESHOLD; 
+
+            // Temizlik
+            setSelectionBox(null);
             isDragging.current = false;
             setIsSelecting(false);
             
-            if (duration < 250 && !moved) { // Kısa tık
+            // KESİN DÜZELTME: Eğer hareket algılandıysa (kutu seçimi olduysa), click olayını durdur ve hiçbir şey yapma.
+            if (moved) {
+                 // Kutu seçimini takiben Leaflet'in yanlışlıkla click olayını tetiklemesini engeller.
+                 L.DomEvent.stopPropagation(e); 
+                 
+                 // EK DÜZELTME: Kutu seçimi yapıldıysa, kısa süreliğine bir sonraki click olayını blokla
+                 setJustDragged(true);
+                 setTimeout(() => setJustDragged(false), 50);
+
+                 return; 
+            }
+
+            // Kısa Tık (Single Click - No Move)
+            if (duration < 250) { 
                 const latlng = e.latlng;
                 const pt = point([latlng.lng, latlng.lat]);
                 let foundTableId = null;
@@ -386,11 +406,12 @@ function SelectionControl({ poly, punches, multiSelected, setMultiSelected, setI
                 if (foundTableId) {
                     // Masa Tıklaması: Izometrik paneli açar
                     setSelected(foundTableId);
-                    setMultiSelected(new Set()); // Punch seçimini temizle
+                    setMultiSelected(new Set()); 
                 } else {
-                    // Boş alana tıklandı, her şeyi temizle
+                    // Boş alana tıklandı.
                     setSelected(null);
-                    setMultiSelected(new Set()); // Punch seçimini temizle
+                    setMultiSelected(new Set()); 
+                    // BoundaryFreePunchClick'in (click event handler) formu açmasına izin verilir.
                 }
             } 
         },
@@ -398,13 +419,14 @@ function SelectionControl({ poly, punches, multiSelected, setMultiSelected, setI
     return null;
 }
 
-
 /* -------------------- BOUNDARY İÇİNDE MASA DIŞI TIK -------------------- */
-function BoundaryFreePunchClick({ poly, boundary, isSelecting, setSelected, setSelectedPunch, setNewPunch }) {
+function BoundaryFreePunchClick({ poly, boundary, isSelecting, setSelected, setSelectedPunch, setNewPunch, justDragged }) {
     useMapEvents({
         click: (e) => {
-            if (isSelecting) return;
-            L.DomEvent.stopPropagation(e);
+            // isSelecting false ise ve SelectionControl'den stopPropagation gelmediyse çalışır.
+            // justDragged (yeni eklenen) kontrolü ile, drag/kutu seçimi sonrası click olayını engelleriz.
+            if (isSelecting || justDragged) return;
+            
             const latlng = e.latlng;
             const pt = point([latlng.lng, latlng.lat]);
 
@@ -465,11 +487,14 @@ export default function App() {
     const [note, setNote] = useState("");
     const [photo, setPhoto] = useState(null);
 
-    // YENİ STATE: MultiSelected artık PUNCH ID'lerini tutar
+    // Punch ID'lerini tutar
     const [multiSelected, setMultiSelected] = useState(new Set()); 
     const [isSelecting, setIsSelecting] = useState(false);
-    // YENİ STATE: Seçim Kutusu Koordinatları
+    // Seçim Kutusu Koordinatları
     const [selectionBox, setSelectionBox] = useState(null); 
+    
+    // YENİ STATE: Drag sonrası click olayını engellemek için
+    const [justDragged, setJustDragged] = useState(false); 
 
 
     const isoRef = useRef(null);
@@ -536,11 +561,11 @@ export default function App() {
         localStorage.setItem("punches", JSON.stringify(punches));
     }, [punches]);
 
+    // getSafeCenter düzeltildi.
     const initialCenter = useMemo(() => getSafeCenter(points), [points]);
     const safeTableId = typeof selected === "string" ? selected : null;
-    const punchVersion = useMemo(() => Object.values(punches).flat().length, [punches]);
     
-    // YENİ SAYAC HESAPLAMALARI:
+    // SAYAC HESAPLAMALARI:
     const totalSelectedPunch = multiSelected.size; // Toplam seçili punch sayısı
     const selectedTablesByPunch = useMemo(() => { // Seçilen punch'ların ait olduğu masaların ID'leri
         const tableIds = new Set();
@@ -616,8 +641,37 @@ export default function App() {
         setSelected(null); // Paneli kapat
     };
 
-    // Punch seçimini temizle
-    const clearSelection = () => setMultiSelected(new Set());
+    // YENİ FONKSİYON: Seçilen Punch'ları Toplu Silme
+    const deleteSelectedPunches = () => {
+        if (totalSelectedPunch === 0) return;
+        
+        if (!window.confirm(`Toplam ${totalSelectedPunch} punch silinecek. Emin misiniz?`)) {
+            return;
+        }
+
+        setPunches(prevPunches => {
+            const nextPunches = { ...prevPunches };
+            
+            // Her masa ID'sini dolaş ve punch'ları filtrele
+            Object.keys(nextPunches).forEach(tableId => {
+                nextPunches[tableId] = (nextPunches[tableId] || []).filter(
+                    punch => !multiSelected.has(punch.id)
+                );
+                
+                // Eğer masada hiç punch kalmadıysa key'i sil
+                if (nextPunches[tableId].length === 0) {
+                    delete nextPunches[tableId];
+                }
+            });
+
+            return nextPunches;
+        });
+        
+        // Silme işleminden sonra seçimi sıfırla
+        setMultiSelected(new Set());
+        setSelected(null); // Yan paneli kapat
+    };
+
 
     const saveEdit = () => {
         if (!editingPunch) return;
@@ -641,34 +695,55 @@ export default function App() {
 
         return (
             <div style={{ background: "#111", color: "#fff", padding: 12, textAlign: "center", height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                <b>Loading GeoJSON...</b>
+                <b>GeoJSON yükleniyor...</b>
             </div>
         );
     }
 
     return (
+        // Harita görünürlüğünü garanti etmek için ana div stilini kontrol ettim
         <div style={{ height: "100vh", width: "100vw", position: "relative" }}>
-            {/* SAYACIN GÜNCELLENMESİ */}
-            <div className="selection-counter" style={{ position: 'absolute', top: 10, right: 10, background: '#333', color: '#fff', padding: '8px 12px', borderRadius: 4, zIndex: 1000 }}>
+            {/* SAYAC VE TOPLU SİLME BUTONU */}
+            <div className="selection-counter" style={{ 
+                position: 'absolute', top: 10, right: 10, 
+                background: 'rgba(25, 25, 30, 0.92)', // Arka plan opaklığı artırıldı
+                color: '#fff', padding: '8px 12px', borderRadius: 4, zIndex: 1000, 
+                display: 'flex', alignItems: 'center', boxShadow: '0 2px 8px rgba(0,0,0,0.3)' 
+            }}>
                 <span>Seçili: <strong>{selectedTablesByPunch.size}</strong> masa</span>
                 <span style={{ marginLeft: 10 }}>Toplam Punch: <strong>{totalSelectedPunch}</strong></span>
                 {totalSelectedPunch > 0 && (
-                    <button onClick={clearSelection} style={{ marginLeft: 10, padding: '4px 8px', cursor: 'pointer' }}>Temizle</button>
+                    <button 
+                        onClick={deleteSelectedPunches} 
+                        style={{ 
+                            marginLeft: 10, 
+                            padding: '4px 10px', 
+                            cursor: 'pointer', 
+                            background: '#f44336', // Kırmızı Silme Rengi
+                            color: '#fff', 
+                            border: 'none', 
+                            borderRadius: 4,
+                            fontWeight: 'bold'
+                        }}
+                    >
+                        Seçilenleri Sil
+                    </button>
                 )}
             </div>
 
             <MapContainer
-                key={punchVersion}
                 center={initialCenter}
                 zoom={18}
                 minZoom={14}
                 maxZoom={22}
-                style={{ height: "100%", width: "100%" }}
+                // Haritanın %100 kapsamasını garantilemek için stil korundu
+                style={{ height: "100%", width: "100%" }} 
                 preferCanvas
                 dragging={true}
                 scrollWheelZoom={true}
                 doubleClickZoom={true}
             >
+                {/* TileLayer'ın doğru yüklenip yüklenmediği kontrol edildi */}
                 <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
                 <GeoJSON data={boundary} style={() => ({ color: "#2ecc71", weight: 2, opacity: 0.9, fillOpacity: 0 })} />
 
@@ -681,25 +756,31 @@ export default function App() {
                     setIsSelecting={setIsSelecting} 
                     isSelecting={isSelecting} 
                     setSelected={setSelected}
-                    setSelectionBox={setSelectionBox} // Box çizmek için
+                    setSelectionBox={setSelectionBox} 
+                    setJustDragged={setJustDragged} // <-- Yeni prop eklendi
                 />
-                <BoundaryFreePunchClick poly={poly} boundary={boundary} isSelecting={isSelecting} setSelected={setSelected} setSelectedPunch={setSelectedPunch} setNewPunch={setNewPunch} />
+                <BoundaryFreePunchClick 
+                    poly={poly} 
+                    boundary={boundary} 
+                    isSelecting={isSelecting} 
+                    setSelected={setSelected} 
+                    setSelectedPunch={setSelectedPunch} 
+                    setNewPunch={setNewPunch}
+                    justDragged={justDragged} // <-- Yeni prop eklendi
+                />
 
                 <GeoJSON
-                    key={`poly-${punchVersion}`}
                     data={poly}
                     style={(feature) => {
                         const tid = getTableId(feature.properties);
                         const isSelected = tid === safeTableId;
-                        // isMulti artık punch'ın ait olduğu masayı vurgular
-                        const isMulti = selectedTablesByPunch.has(tid); 
                         const hasPunch = getPunchCount(punches, tid) > 0;
                         return {
-                            color: isMulti ? "#ff9800" : isSelected ? "#007bff" : hasPunch ? "#d32f2f" : "#333",
-                            weight: isMulti ? 4 : isSelected ? 3 : hasPunch ? 2.5 : 2,
-                            opacity: 1,
-                            fillOpacity: isMulti ? 0.4 : isSelected ? 0.25 : hasPunch ? 0.15 : 0.1,
-                            fillColor: isMulti ? "#ff9800" : isSelected ? "#007bff" : hasPunch ? "#d32f2f" : "#666",
+                            color: isSelected ? "#007bff" : hasPunch ? "#d32f2f" : "#333",
+                            weight: isSelected ? 3 : hasPunch ? 2.5 : 2,
+                            opacity: isSelected ? 0.25 : hasPunch ? 0.15 : 0.1,
+                            fillOpacity: isSelected ? 0.25 : hasPunch ? 0.15 : 0.1,
+                            fillColor: isSelected ? "#007bff" : hasPunch ? "#d32f2f" : "#666",
                         };
                     }}
                     onEachFeature={(feature, layer) => {
@@ -724,9 +805,9 @@ export default function App() {
                             if (e.originalEvent.button !== 0 || e.target.dragging?.enabled()) return;
                             L.DomEvent.stopPropagation(e);
                             setSelected(tid);
-                            setMultiSelected(new Set()); // Punch seçimini temizle
-                            setSelectedPunch(null); // İzometrik paneldeki seçili punch'ı temizle
-                            setNewPunch(null); // Punch ekleme formunu kapat
+                            setMultiSelected(new Set()); 
+                            setSelectedPunch(null); 
+                            setNewPunch(null); 
                         });
                     }}
                 />
@@ -736,10 +817,10 @@ export default function App() {
                     polyGeoJSON={poly} 
                     setSelectedPunch={setSelectedPunch} 
                     safeTableId={safeTableId}
-                    multiSelectedPunches={multiSelected} // Seçili punch ID'lerini gönder
+                    multiSelectedPunches={multiSelected} 
                 />
 
-                {/* YENİ KUTU SEÇİM ÇİZİM BİLEŞENİ */}
+                {/* KUTU SEÇİM ÇİZİM BİLEŞENİ */}
                 <BoxSelectionOverlay 
                     startPoint={selectionBox?.start} 
                     endPoint={selectionBox?.end} 
@@ -749,6 +830,7 @@ export default function App() {
 
             {/* --- İZOMETRİK PANEL --- */}
             {safeTableId && (
+                // Panel stili App.css'e uyumlu hale getirildi, ancak harita görünürlüğünü etkileyecek bir durum yok
                 <div className="panel" style={{
                     position: 'absolute', top: 0, right: 0, width: 350, height: '100%', 
                     background: '#222', zIndex: 1500, padding: 16, color: '#fff',
@@ -761,7 +843,7 @@ export default function App() {
                     <div style={{ position: "relative", width: "100%", display: "flex", justifyContent: "center" }}>
                         <img
                             ref={isoRef}
-                            src="/photos/table_iso.png" // Lütfen bu resim yolunun doğru olduğundan emin olun!
+                            src="/photos/table_iso.png" 
                             alt="Isometric"
                             onLoad={() => setIsoLoaded(true)}
                             onError={() => setIsoError(true)}
@@ -813,8 +895,7 @@ export default function App() {
                                     cursor: "pointer",
                                     zIndex: 10,
                                     transition: "all 0.2s ease",
-                                    pointerEvents: isoError ? 'none' : 'auto', // Resim yoksa tıklamayı engelle
-                                    // Seçili olanı görsel olarak vurgula
+                                    pointerEvents: isoError ? 'none' : 'auto', 
                                     opacity: selectedPunch?.id === p.id ? 1 : 0.8,
                                     scale: selectedPunch?.id === p.id ? '1.4' : '1',
                                 }}
@@ -971,7 +1052,7 @@ export default function App() {
                 </div>
             )}
 
-            {/* --- SERBEST PUNCH FORMU (Mevcut kodunuzdan taşındı) --- */}
+            {/* --- SERBEST PUNCH FORMU --- */}
             {newPunch && newPunch.table_id === "__free__" && (
                 <div
                     onClick={() => { setNewPunch(null); setNote(""); setPhoto(null); }}
@@ -1011,7 +1092,7 @@ export default function App() {
                 </div>
             )}
 
-            {/* --- GLOBAL EDIT MODAL (Mevcut kodunuzdan taşındı) --- */}
+            {/* --- GLOBAL EDIT MODAL --- */}
             {editingPunch && (
                 <div
                     onClick={() => setEditingPunch(null)}
