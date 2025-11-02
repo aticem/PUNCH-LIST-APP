@@ -1439,7 +1439,8 @@ export default function App() {
                         position: "absolute",
                         left: leftRel,
                         top: topRel,
-                        transform: "translateX(-50%)",
+                        transform: `translateX(-50%) scale(${1 / isoZoom})`, // DÜZELTME: Ters ölçekleme uygulandı
+                        transformOrigin: "center bottom", // DÜZELTME: Ölçek merkezini ayarladık
                         zIndex: 1600,
                         width: popupWidth,
                         maxWidth: 300,
