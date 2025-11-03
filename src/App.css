@@ -1,31 +1,68 @@
-html, body, #root { height: 100%; margin: 0; padding: 0; }
+/* src/App.css (Full - with Animated Aim) */
 
-.leaflet-container { background: #b9d7df; cursor: default; }
-/* Bu aktif stilini kaldırmıyoruz, MiddleMouseDrag bunu yönetiyor: */
+/* Temel Sıfırlama */
+html, body, #root { 
+  height: 100%; 
+  margin: 0; 
+  padding: 0; 
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+}
+
+/* Leaflet Harita Konteyneri */
+.leaflet-container { 
+  background: #b9d7df; 
+  cursor: default;
+}
 .leaflet-container:active { cursor: grabbing; }
 
-/* Sağ panel */
+/* Sağ panel (Detaylar, İzometrik ve Form) */
 .panel {
-  position: absolute; right: 0; top: 0; bottom: 0; width: 40%;
-  background: #111; color: #fff; display: flex; flex-direction: column;
-  align-items: center; border-left: 2px solid #333; z-index: 1000;
-  overflow-y: auto; padding: 12px 0;
+  position: absolute; right: 0; top: 0; bottom: 0; 
+  width: 360px;
+  background: #111; 
+  color: #fff; 
+  display: flex; 
+  flex-direction: column;
+  align-items: center; 
+  border-left: 2px solid #333; 
+  z-index: 1000;
+  overflow-y: auto; 
+  padding: 12px 0;
 }
 .panel h3 { margin: 12px 0; font-size: 1.4rem; }
 .panel img { width: 90%; border-radius: 10px; cursor: default; }
 
 .panel input[type="text"],
-.panel input[type="file"] {
+.panel input[type="file"],
+.panel select,
+.panel textarea {
   display: block; width: 80%; margin: 8px auto; padding: 8px;
   border-radius: 6px; border: 1px solid #333; background: #222; color: #fff;
 }
 
-.btn { padding: 8px 12px; border: none; border-radius: 6px; color: #fff; cursor: pointer; font-weight: 500; }
+/* Butonlar */
+.btn { 
+  padding: 8px 12px; 
+  border: none; 
+  border-radius: 6px; 
+  color: #fff; 
+  cursor: pointer; 
+  font-weight: 500; 
+  transition: background-color 0.2s;
+}
+.btn:hover { opacity: 0.9; }
 .btn-green { background: #4caf50; }
 .btn-red   { background: #f44336; margin-left: 10px; }
-.btn-gray  { background: #444; margin-top: 10px; width: 80%; display: block; margin: 16px auto 0; }
+.btn-gray  { 
+  background: #444; 
+  margin-top: 10px; 
+  width: 80%; 
+  display: block; 
+  margin: 16px auto 0; 
+}
+.btn-green, .btn-red, .btn-gray { margin-left: 0; }
 
-/* Tooltip */
+/* Tooltip (Leaflet) */
 .leaflet-tooltip-custom {
   background: rgba(0, 0, 0, 0.85);
   color: #fff; border: none; border-radius: 6px; padding: 6px 10px;
@@ -39,7 +76,7 @@ html, body, #root { height: 100%; margin: 0; padding: 0; }
   border-top-color: rgba(0, 0, 0, 0.85);
 }
 
-/* Hover masa etiketi */
+/* Hover masa etiketi (Custom React) */
 .table-id-label {
   position: absolute;
   transform: translate(-50%, -100%);
@@ -54,7 +91,7 @@ html, body, #root { height: 100%; margin: 0; padding: 0; }
   white-space: nowrap;
 }
 
-/* İzometrik görsel pan/zoom */
+/* İzometrik görsel pan/zoom alanı */
 .iso-container {
   position: relative;
   overflow: hidden;
@@ -63,14 +100,16 @@ html, body, #root { height: 100%; margin: 0; padding: 0; }
   border-radius: 12px;
   border: 1px solid #333;
   background: #000;
+  cursor: grab;
 }
+.iso-container:active { cursor: grabbing; }
 .iso-image {
   transform-origin: center center;
   transition: transform 0.1s linear;
-  cursor: default;
+  cursor: crosshair;
 }
 
-/* 🆕 Nefes alan hover noktası */
+/* Nefes alan hover noktası (eski) */
 .hover-pulse {
   position: absolute;
   width: 16px;
@@ -84,25 +123,74 @@ html, body, #root { height: 100%; margin: 0; padding: 0; }
   box-shadow: 0 0 8px rgba(255, 80, 80, 0.6);
   z-index: 2000;
 }
-
 @keyframes pulse {
   0% { transform: translate(-50%, -50%) scale(1); opacity: 0.8; }
   50% { transform: translate(-50%, -50%) scale(1.4); opacity: 0.5; }
   100% { transform: translate(-50%, -50%) scale(1); opacity: 0.8; }
 }
 
-/* -------------------- KRİTİK SEÇİM EKLENTİLERİ -------------------- */
-
-/* Kutu Seçim Overlay Stili */
+/* Kutu Seçim Overlay */
 .selection-box {
   position: absolute;
-  background-color: rgba(106, 133, 255, 0.4); /* Mavi tonlu yarı saydam arka plan */
-  border: 1px dashed #6a85ff; /* Mavi kesik çizgi kenarlık */
-  z-index: 9999; /* Haritadaki tüm katmanların üzerinde olmalı */
-  pointer-events: none; /* KRİTİK: Harita üzerinde tıklama olaylarını engellememesi için */
+  background-color: rgba(106, 133, 255, 0.4); 
+  border: 1px dashed #6a85ff; 
+  z-index: 9999; 
+  pointer-events: none; 
 }
 
 /* Seçim başladığında harita imlecini çapraz yap */
-.leaflet-container.is-selecting {
-  cursor: crosshair !important;
+.leaflet-container.is-selecting { cursor: crosshair !important; }
+
+/* Aim Pointer Aktifken Tarayıcı İmlecini Gizle */
+.leaflet-container.is-aiming { cursor: none !important; }
+
+/* Aim Gösterici Container (React tarafından kullanılır) */
+.aim-pointer-container {
+  position: fixed;
+  pointer-events: none;
+  z-index: 99999;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+}
+
+/* 🔴 Aktif Punch Hover (İmleç Ucunda Parlayan Hedef) */
+.aim-active {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 100000;
+  width: 32px;
+  height: 32px;
+}
+.aim-core {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  background: #ff3b30;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 12px rgba(255, 59, 48, 0.8);
+}
+
+/* Dalga halkaları */
+.aim-wave {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border: 2px solid rgba(255, 59, 48, 0.6);
+  border-radius: 50%;
+  transform: translate(-50%, -50%) scale(0.2);
+  opacity: 0.8;
+  animation: aimPulse 2s infinite ease-out;
+}
+.aim-wave.wave1 { animation-delay: 0s; }
+.aim-wave.wave2 { animation-delay: 0.5s; }
+.aim-wave.wave3 { animation-delay: 1s; }
+
+@keyframes aimPulse {
+  0%   { transform: translate(-50%, -50%) scale(0.2); opacity: 0.8; }
+  70%  { transform: translate(-50%, -50%) scale(1.4); opacity: 0.2; }
+  100% { transform: translate(-50%, -50%) scale(1.6); opacity: 0; }
 }

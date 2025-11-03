@@ -12,6 +12,22 @@ import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
 import { point, centroid } from "@turf/turf";
 import "./App.css";
 
+
+function AimDot({ x, y }) {
+  if (x == null || y == null) return null;
+  return (
+    <div
+      className="aim-active"
+      style={{ left: `${x}px`, top: `${y}px` }}
+    >
+      <div className="aim-core"></div>
+      <div className="aim-wave wave1"></div>
+      <div className="aim-wave wave2"></div>
+      <div className="aim-wave wave3"></div>
+    </div>
+  );
+}
+
 // GeoJSON dosyaları
 import tablesPolyUrl from "/tables_poly.geojson?url";
 import tablesPointsUrl from "/tables_points.geojson?url";
@@ -69,7 +85,7 @@ function generatePointInsidePolygon(polygon, maxTries = 100) {
 
   for (let i = 0; i < maxTries; i++) {
     const lng = sw.lng + Math.random() * (ne.lng - sw.lng);
-    const lat = sw.lat + (1 - Math.random()) * (ne.lat - sw.lat); // 1-random
+    const lat = sw.lat + Math.random() * (ne.lat - sw.lat);
     const pt = point([lng, lat]);
     if (booleanPointInPolygon(pt, polygon)) return [lat, lng];
   }
@@ -159,10 +175,10 @@ function RightClickUnselect({
   return null;
 }
 
-/* -------------------- Seçim Kontrol (FİNAL) -------------------- */
+/* -------------------- Seçim Kontrol (DÜZELTİLMİŞ) -------------------- */
 function SelectionControl({
   poly,
-  punches, // Bu artık seçim için kullanılmayacak
+  punches,
   multiSelected,
   setMultiSelected,
   setIsSelecting,
@@ -170,7 +186,6 @@ function SelectionControl({
   setSelected,
   setSelectionBox,
   setJustDragged,
-  selectablePunches, // YENİ: Koordinat garantili liste
 }) {
   const map = useMap();
   const isDragging = useRef(false);
@@ -244,10 +259,10 @@ function SelectionControl({
         const initialSelected = isAdditive ? multiSelected : new Set();
         const next = new Set(initialSelected);
 
-        // YENİ: Koordinat garantili listeyi kullan
-        selectablePunches 
+        Object.values(punches)
+          .flat()
           .forEach((p) => {
-            // p.latlng'nin var olduğu artık garantili
+            if (!p.latlng) return;
             const [lat, lng] = p.latlng;
             if (
               lat >= minLat &&
@@ -401,17 +416,12 @@ function PunchLayer({
                   polyIndexRef.current[tid]
                 );
               }
-              // Not: PunchLayer sadece görselleştirme için latlng atar, state'i değiştirmez.
-              // Seçim kontrolü için artık selectablePunches listesi kullanılıyor.
-              // p.latlng = punchLocationsRef.current[p.id]; 
+              p.latlng = punchLocationsRef.current[p.id];
             } else return;
           }
 
-          const punchLatLng = p.latlng || punchLocationsRef.current[p.id];
-          if (!punchLatLng) return;
-          
           const isSelected = multiSelectedPunches.has(p.id);
-          const marker = L.circleMarker(punchLatLng, {
+          const marker = L.circleMarker(p.latlng, {
             radius: isSelected ? 9 : 6,
             color: isSelected ? "#00FFFF" : "#fff",
             weight: isSelected ? 2.5 : 1.5,
@@ -441,7 +451,7 @@ function PunchLayer({
               maxWidth: 280,
               className: "custom-punch-popup",
             });
-            L.circle(punchLatLng, {
+            L.circle(p.latlng, {
               radius: 25,
               fill: false,
               stroke: false,
@@ -453,7 +463,7 @@ function PunchLayer({
                 marker.openPopup();
               });
           } else if (areTablePunchesInteractive) {
-            L.circle(punchLatLng, {
+            L.circle(p.latlng, {
               radius: 20,
               fill: false,
               stroke: false,
@@ -662,38 +672,6 @@ export default function App() {
     }
     return ids;
   }, [multiSelected, punches, totalSelectedPunch]);
-
-  // YENİ: Seçilebilir punch'ları koordinatlarıyla birlikte hazırla (punch'ların latlng garantisi)
-  const selectablePunches = useMemo(() => {
-    if (!poly) return [];
-    const polyIndex = new Map(
-      poly.features.map(f => [getTableId(f.properties), f])
-    );
-    const allPunches = Object.values(punches).flat();
-
-    // Punch'ları haritada seçilebilir hale getirmek için koordinatlarını kontrol et
-    return allPunches.map(p => {
-      // Eğer latlng zaten varsa, kullan
-      if (p.latlng) return p;
-
-      const tid = p.table_id;
-      const polyFeature = polyIndex.get(tid);
-
-      // Eğer masaya ait punch'ın koordinatı yoksa, masanın merkezini kullan
-      if (tid !== "__free__" && polyFeature) {
-        try {
-          // Masanın merkez noktasını (centroid) kullan (stabil bir nokta sağlar)
-          const center = centroid(polyFeature).geometry.coordinates; // [lng, lat]
-          // Leaflet/state formatı [lat, lng]
-          return { ...p, latlng: [center[1], center[0]] };
-        } catch {
-          return p; // Hata olursa koordinatsız kalır
-        }
-      }
-      return p;
-    }).filter(p => p.latlng && p.latlng.length === 2); // Koordinatı olanları al
-  }, [punches, poly]); // Bağımlılıklar: punches ve poly
-
 
   /* -------------------- TopBar (sola hizalı) -------------------- */
   const TopBar = () => (
@@ -1323,7 +1301,6 @@ export default function App() {
           setSelected={setSelected}
           setSelectionBox={setSelectionBox}
           setJustDragged={setJustDragged}
-          selectablePunches={selectablePunches} // GÜNCELLENDİ
         />
         <BoundaryFreePunchClick
           poly={poly}
