@@ -12,6 +12,9 @@ import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
 import { point, centroid } from "@turf/turf";
 import "./App.css";
 
+// HATA DÜZELTİLDİ: Import yolu './components/ExportPunchList' olarak güncellendi.
+import ExportPunchList from "./components/ExportPunchList"; 
+
 
 function AimDot({ x, y }) {
   if (x == null || y == null) return null;
@@ -85,7 +88,7 @@ function generatePointInsidePolygon(polygon, maxTries = 100) {
 
   for (let i = 0; i < maxTries; i++) {
     const lng = sw.lng + Math.random() * (ne.lng - sw.lng);
-    const lat = sw.lat + Math.random() * (ne.lat - sw.lat);
+    const lat = sw.lat + (1 - Math.random()) * (ne.lat - sw.lat); // Lat için 1 - Math.random() kullanılmalı
     const pt = point([lng, lat]);
     if (booleanPointInPolygon(pt, polygon)) return [lat, lng];
   }
@@ -673,7 +676,11 @@ export default function App() {
     return ids;
   }, [multiSelected, punches, totalSelectedPunch]);
 
-  /* -------------------- TopBar (sola hizalı) -------------------- */
+  // Tüm punch'ları tek bir array'de topla (Export için gerekli)
+  const allPunches = useMemo(() => Object.values(punches).flat(), [punches]);
+
+
+  /* -------------------- TopBar (sağa hizalı Export eklendi) -------------------- */
   const TopBar = () => (
     <div
       style={{
@@ -683,127 +690,138 @@ export default function App() {
         right: 10,
         zIndex: 1700,
         display: "flex",
-        justifyContent: "flex-start",
-        alignItems: "stretch",
+        // SOL ve SAĞ grupları ayırmak için 'space-between' kullan
+        justifyContent: "space-between", 
+        alignItems: "flex-start",
         gap: 10,
       }}
     >
-      {/* Legend */}
-      <div
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 10,
-          padding: "6px 10px",
-          borderRadius: 10,
-          color: "#fff",
-          background: "rgba(20,22,28,0.85)",
-          border: "1px solid rgba(255,255,255,0.06)",
-          boxShadow: "0 6px 12px rgba(0,0,0,0.18)",
-          backdropFilter: "blur(8px)",
-        }}
-      >
-        {subcontractors.length === 0 ? (
-          <span style={{ opacity: 0.7, fontSize: 12 }}>Legend</span>
-        ) : (
-          subcontractors.map((s) => (
-            <span
-              key={s.name}
-              style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+      {/* SOL GRUP: Legend, Sayaç, Filtre */}
+      <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
+        {/* Legend */}
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "6px 10px",
+            borderRadius: 10,
+            color: "#fff",
+            background: "rgba(20,22,28,0.85)",
+            border: "1px solid rgba(255,255,255,0.06)",
+            boxShadow: "0 6px 12px rgba(0,0,0,0.18)",
+            backdropFilter: "blur(8px)",
+          }}
+        >
+          {subcontractors.length === 0 ? (
+            <span style={{ opacity: 0.7, fontSize: 12 }}>Legend</span>
+          ) : (
+            subcontractors.map((s) => (
+              <span
+                key={s.name}
+                style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+              >
+                <i
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: "50%",
+                    display: "inline-block",
+                    background: s.color,
+                    border: "1px solid #fff",
+                  }}
+                />
+                <span style={{ fontSize: 12.5, opacity: 0.95 }}>{s.name}</span>
+              </span>
+            ))
+          )}
+        </div>
+
+        {/* Sayaç + toplu sil */}
+        <div
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 8,
+            padding: "6px 10px",
+            borderRadius: 10,
+            background: "rgba(20,22,28,0.85)",
+            border: "1px solid rgba(255,255,255,0.06)",
+            color: "#fff",
+            boxShadow: "0 6px 12px rgba(0,0,0,0.18)",
+            backdropFilter: "blur(8px)",
+          }}
+        >
+          <span style={{ fontSize: 13.5 }}>
+            {totalSelectedPunch || 0} punch seçili
+          </span>
+          {totalSelectedPunch > 0 && (
+            <button
+              onClick={deleteSelectedPunches}
+              style={{
+                background: "#e53935",
+                color: "#fff",
+                border: "none",
+                borderRadius: 8,
+                padding: "6px 10px",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
             >
-              <i
-                style={{
-                  width: 10,
-                  height: 10,
-                  borderRadius: "50%",
-                  display: "inline-block",
-                  background: s.color,
-                  border: "1px solid #fff",
-                }}
-              />
-              <span style={{ fontSize: 12.5, opacity: 0.95 }}>{s.name}</span>
-            </span>
-          ))
-        )}
+              Seçilenleri Sil
+            </button>
+          )}
+        </div>
+
+        {/* Filtre */}
+        <select
+          value={activeFilter}
+          onChange={(e) => setActiveFilter(e.target.value)}
+          title="Taşerona göre filtrele"
+          style={{
+            background: "rgba(20,22,28,0.85)",
+            color: "#fff",
+            border: "1px solid rgba(255,255,255,0.06)",
+            borderRadius: 10,
+            padding: "6px 10px",
+            fontSize: 13,
+            backdropFilter: "blur(8px)",
+            boxShadow: "0 6px 12px rgba(0,0,0,0.18)",
+            minWidth: 150,
+          }}
+        >
+          <option value="">Tüm Taşeronlar</option>
+          {subcontractors.map((s) => (
+            <option key={s.name} value={s.name}>
+              {s.name}
+            </option>
+          ))}
+        </select>
       </div>
+      
+      {/* SAĞ GRUP: Export, Ayarlar */}
+      <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
+        
+        {/* YENİ BİLEŞEN: ExportPunchList */}
+        <ExportPunchList punches={allPunches} /> 
 
-      {/* Sayaç + toplu sil */}
-      <div
-        style={{
-          display: "inline-flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "6px 10px",
-          borderRadius: 10,
-          background: "rgba(20,22,28,0.85)",
-          border: "1px solid rgba(255,255,255,0.06)",
-          color: "#fff",
-          boxShadow: "0 6px 12px rgba(0,0,0,0.18)",
-          backdropFilter: "blur(8px)",
-        }}
-      >
-        <span style={{ fontSize: 13.5 }}>
-          {totalSelectedPunch || 0} punch seçili
-        </span>
-        {totalSelectedPunch > 0 && (
-          <button
-            onClick={deleteSelectedPunches}
-            style={{
-              background: "#e53935",
-              color: "#fff",
-              border: "none",
-              borderRadius: 8,
-              padding: "6px 10px",
-              fontWeight: 700,
-              cursor: "pointer",
-            }}
-          >
-            Seçilenleri Sil
-          </button>
-        )}
+        {/* Ayarlar */}
+        <button
+          onClick={() => setShowSettings(true)}
+          style={{
+            background: "linear-gradient(135deg,#6d6ef9,#836bff)",
+            color: "#fff",
+            border: "none",
+            borderRadius: 10,
+            padding: "8px 12px",
+            fontWeight: 800,
+            cursor: "pointer",
+            boxShadow: "0 10px 26px rgba(109,110,249,0.35)",
+          }}
+        >
+          ⚙️ Ayarlar
+        </button>
       </div>
-
-      {/* Filtre */}
-      <select
-        value={activeFilter}
-        onChange={(e) => setActiveFilter(e.target.value)}
-        title="Taşerona göre filtrele"
-        style={{
-          background: "rgba(20,22,28,0.85)",
-          color: "#fff",
-          border: "1px solid rgba(255,255,255,0.06)",
-          borderRadius: 10,
-          padding: "6px 10px",
-          fontSize: 13,
-          backdropFilter: "blur(8px)",
-          boxShadow: "0 6px 12px rgba(0,0,0,0.18)",
-          minWidth: 150,
-        }}
-      >
-        <option value="">Tüm Taşeronlar</option>
-        {subcontractors.map((s) => (
-          <option key={s.name} value={s.name}>
-            {s.name}
-          </option>
-        ))}
-      </select>
-
-      {/* Ayarlar */}
-      <button
-        onClick={() => setShowSettings(true)}
-        style={{
-          background: "linear-gradient(135deg,#6d6ef9,#836bff)",
-          color: "#fff",
-          border: "none",
-          borderRadius: 10,
-          padding: "8px 12px",
-          fontWeight: 800,
-          cursor: "pointer",
-          boxShadow: "0 10px 26px rgba(109,110,249,0.35)",
-        }}
-      >
-        ⚙️ Ayarlar
-      </button>
     </div>
   );
 
@@ -881,6 +899,7 @@ export default function App() {
       latlng: Array.isArray(newPunch.latlng)
         ? newPunch.latlng
         : [newPunch.latlng.lat, newPunch.latlng.lng],
+      date: Date.now(), // Yeni eklenen alan: Oluşturma tarihi
     };
     setPunches((prev) => ({
       ...prev,
