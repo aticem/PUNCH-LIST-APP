@@ -11,9 +11,10 @@ import L from "leaflet";
 import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
 import { point, centroid } from "@turf/turf";
 import "./App.css";
+import ExportMenu from "./components/ExportMenu";   // ✅ sadece bu
 
-// HATA DÜZELTİLDİ: Import yolu './components/ExportPunchList' olarak güncellendi.
-import ExportPunchList from "./components/ExportPunchList"; 
+
+
 
 
 function AimDot({ x, y }) {
@@ -802,8 +803,8 @@ export default function App() {
       {/* SAĞ GRUP: Export, Ayarlar */}
       <div style={{ display: "flex", gap: 10, alignItems: "stretch" }}>
         
-        {/* YENİ BİLEŞEN: ExportPunchList */}
-        <ExportPunchList punches={allPunches} /> 
+        {/* YENİ BİLEŞEN: ExportMenu */}
+        <ExportMenu punches={allPunches} /> 
 
         {/* Ayarlar */}
         <button
